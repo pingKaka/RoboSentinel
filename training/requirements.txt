@@ -1,0 +1,14 @@
+# Install a CUDA-compatible PyTorch build before this file.
+ms-swift>=4.0
+transformers>=4.57
+qwen-vl-utils>=0.0.14
+peft>=0.17
+accelerate
+bitsandbytes
+decord
+opencv-python-headless
+Pillow
+PyYAML
+
+# Optional but recommended on RTX 4090 when train.yaml uses flash_attn:
+# python -m pip install flash-attn --no-build-isolation

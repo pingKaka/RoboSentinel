@@ -1,0 +1,41 @@
+# This path must exist on the remote server.
+model: "/data/models/Qwen3-VL-8B-Instruct"
+train_dataset: "training/data/sft/train.jsonl"
+val_dataset: "training/data/sft/val.jsonl"
+output_dir: "training/output/qwen3_vl_8b_robot_failure_lora"
+
+tuner_type: "lora"
+torch_dtype: "bfloat16"
+num_train_epochs: 3
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 0.0001
+warmup_ratio: 0.05
+weight_decay: 0.01
+max_length: 8192
+
+lora_rank: 8
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules: "all-linear"
+freeze_vit: true
+freeze_aligner: true
+
+gradient_checkpointing: true
+attn_impl: "flash_attn"
+packing: false
+eval_steps: 10
+save_steps: 10
+logging_steps: 1
+save_total_limit: 3
+dataset_num_proc: 4
+dataloader_num_workers: 4
+seed: 42
+
+# Qwen3-VL/ms-swift visual token limits. Sixteen input images are used per sample.
+image_max_token_num: 256
+pytorch_cuda_alloc_conf: "expandable_segments:True"
+
+# Add uncommon ms-swift flags here without changing run_training.py.
+extra_args: []

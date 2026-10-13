@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+.cache/
+
+# Model weights and captured videos are transferred separately, not through Git.
+checkpoint/
+video/
+
+# Local model and runtime artifacts can be large or machine-specific.
+# Remove these lines if the project is intended to version them.
+result/input_frames/
+result/reference_frames/
+result/**
+!result/.gitkeep
+
+# API credentials and local environment files.
+.env
+*.key
+
+# Fine-tuning data, credentials, generated images, and checkpoints.
+training/config/remote.env
+training/data/raw/**
+training/data/references/**
+training/data/processed/**
+training/data/sft/**
+training/output/**
+!training/data/raw/.gitkeep
+!training/data/references/.gitkeep
+!training/data/processed/.gitkeep
+!training/data/sft/.gitkeep

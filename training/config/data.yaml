@@ -1,0 +1,15 @@
+project_root: "../.."
+annotations: "training/data/annotations/episodes.jsonl"
+processed_dir: "training/data/processed"
+sft_dir: "training/data/sft"
+prompt_file: "training/config/sft_prompt_zh.txt"
+
+frame_sample_interval_seconds: 0.5
+source_image_size: 384
+tile_width: 256
+tile_height: 192
+jpeg_quality: 95
+
+# Reject a camera pair when the two durations differ by more than this value.
+max_camera_duration_delta_sec: 0.25
+overwrite: false
