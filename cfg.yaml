@@ -11,7 +11,7 @@ streams:
   wrist_camera:
     provider: null
   robot_state:
-    enabled: false
+    enabled: true
     provider: null
   max_timestamp_delta_sec: 0.05
 
@@ -26,7 +26,12 @@ stages:
   tracker:
     backend: "grounding_dino_sam_online"
   rules:
-    plugins: []
+    plugins:
+      - name: target_lost
+        options:
+          seconds: 2.0
+          max_gap_seconds: 2.0
+      - controller_fault
   diagnosis:
     backend: "qwen3_vl_event_triggered"
 
@@ -36,10 +41,113 @@ runtime:
 deployment:
   host: "0.0.0.0"
   port: 8000
+  max_tasks: 1
   # Python factory path: package.module:function
   # The function receives the project config and returns StreamingRoboSentinel.
-  pipeline_factory: null
+  pipeline_factory: "my_backend:create_pipeline"
+  preload_factory: "my_backend:preload_models"
+
+backend:
+  quantize_vlm: true
+  vlm_max_new_tokens: 768
+  vlm_image_max_side: 768
+  box_threshold: 0.3
+  text_threshold: 0.25
+  min_mask_pixels: 16
+  reseed_frames: 60
+  redetect_frames: 10
 
 outputs:
-  event_log: "result/runtime/events.jsonl"
-  diagnosis: "result/runtime/diagnosis.jsonl"
+  server_dir: "result/server"
+  console: true
+  save_annotated_frames: false
+  fsync: false
+
+client:
+  server: "http://127.0.0.1:8000"
+  fps: 5
+  timeout_sec: 600
+  jpeg_quality: 85
+  ws_max_size: 16777216
+  ping_timeout_sec: 120
+  output_dir: "result/client"
+  record_observations: true
+  log_level: "INFO"
+
+replay:
+  observations: null
+  external: "ur5e_video_teleop/videos/exterior_1.mp4"
+  wrist: "ur5e_video_teleop/videos/wrist_1.mp4"
+  seconds: 30
+  simulate_fault_at: null
+
+camera_client:
+  external: "0"
+  wrist: "2"
+
+check:
+  image: null
+  mode: "full"
+  target: "bottle"
+  frames: 3
+  interval_sec: 0.1
+
+video_teleop:
+  fps: 15
+  debug: false
+  record_key: "space"
+  exit_key: "esc"
+  output_dir: "ur5e_video_teleop/videos"
+  preview: true
+  sentinel:
+    enabled: true
+  teleop:
+    control_mode: "isoteleop"
+    dynamixel_config:
+      port: "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0"
+      hardware_offsets: [134.473, -178.593, -269.827, -275.8, -187.823, -458.086]
+      use_gripper: &use_gripper true
+      joint_ids: [1, 2, 3, 4, 5, 6]
+      joint_offsets: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      joint_signs: [1, 1, -1, 1, 1, 1]
+      gripper_config: [7, 2.60, 3.54]
+  robot:
+    ip: "192.168.131.12"
+    use_gripper: *use_gripper
+    close_threshold: 0.7
+    gripper_bin_threshold: 0.98
+    gripper_port: "/dev/ur5e_left_gripper"
+    gripper_reverse: false
+    gripper_force: 70
+    gripper_speed: 60
+    control_space: "tcp_force"
+    tcp_force:
+      reference_frame: "tcp"
+    tcp_position:
+      reference_frame: "base"
+      speed: 0.5
+      acceleration: 0.5
+      servo_time: 0.1
+      lookahead_time: 0.1
+      gain: 300
+    robot_urdf_path: assets/urdf/ur5e.urdf
+    force_mode:
+      kp: 2000
+      kd: 200
+      kp_rot: 4000
+      kd_rot: 800
+      rtde_freq: 125
+      select_vector: [1, 1, 1, 1, 1, 1]
+      force_limit: [2, 2, 2, 2, 2, 2]
+      pos_delta: 0.2
+      vel_delta: 0.2
+      gain_scale: 1.5
+    joint_mode:
+      look_ahead_time: 0.2
+      dt: 0.002
+      gain: 100
+  cameras:
+    wrist_cam_serial: "349522070893"
+    exterior_cam_serial: "348522073968"
+    width: 424
+    height: 240

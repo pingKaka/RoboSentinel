@@ -14,8 +14,8 @@ sympy
 networkx
 torch>=2.5
 torchvision
-transformers
+transformers==5.16.1
 fastapi
 uvicorn
-websockets
+websockets>=15
 httpx

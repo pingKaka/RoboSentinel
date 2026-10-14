@@ -5,6 +5,8 @@ __pycache__/
 # Model weights and captured videos are transferred separately, not through Git.
 checkpoint/
 video/
+ur5e_video_teleop/videos/
+*.egg-info/
 
 # Local model and runtime artifacts can be large or machine-specific.
 # Remove these lines if the project is intended to version them.

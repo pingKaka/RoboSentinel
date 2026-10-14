@@ -1,5 +1,9 @@
 # RoboSentinel 服务器部署教程
 
+日常运行请优先看 [精简运行教程](system_walkthrough_zh.md)。参数已统一到根目录 `cfg.yaml`，见 [参数说明](config_reference_zh.md)；本文命令行参数仍可用作临时覆盖。服务端默认将结果保存至 `result/server/<会话ID>/results.jsonl` 后再回传，本地默认自动创建独立运行目录。
+
+遥操作接入、常驻模型、视频回放和实时测试请按 [实时检测测试流程](realtime_test_zh.md) 执行。
+
 ## 1. 系统分工
 
 ```text
@@ -47,56 +51,19 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 python failure_detection/run_pipeline.py
 ```
 
-三个模型都应显示 `available: true`。
+三个模型都应显示 `available: true`。这只检查目录存在，实际 GPU 推理检查见下一节。
 
 以后代码有更新时，先在本地提交并推送，再在服务器执行：
 
 ```bash
 cd /data/RoboSentinel
 git pull --ff-only
+pip install -r requirements.txt
 ```
 
-## 3. 接入真实模型
+## 3. 已接入的真实模型和规则
 
-网络服务已经实现，但真实模型需要通过工厂函数接入。在根目录创建 `my_backend.py`：
-
-```python
-from failure_detection.pipeline import StreamingRoboSentinel
-from failure_detection.pipeline.rule_engine import StreamingRuleEngine
-from failure_detection.stages import (
-    EventTriggeredVLMDiagnoser,
-    OnlineGroundingSAMTracker,
-    VLMScenePlanner,
-)
-
-
-def create_pipeline(config):
-    qwen = load_qwen_once(config["models"]["vlm"])
-    tracking_backend = create_online_tracker(
-        config["models"]["grounding_dino"],
-        config["models"]["sam"],
-    )
-
-    planner = VLMScenePlanner(qwen.plan_tracking_targets)
-    tracker = OnlineGroundingSAMTracker(tracking_backend)
-    rules = StreamingRuleEngine([
-        # 加入经过验证的故障规则
-    ])
-    diagnoser = EventTriggeredVLMDiagnoser(qwen.diagnose_failure)
-
-    return StreamingRoboSentinel(
-        planner, tracker, rules, diagnoser,
-        buffer_seconds=config["runtime"]["buffer_seconds"],
-    )
-```
-
-需要实现三个部分：
-
-- `load_qwen_once`：加载Qwen3-VL；
-- `create_online_tracker`：加载GroundingDINO和SAM；
-- 故障规则插件。
-
-然后修改 `cfg.yaml`：
+仓库已包含根目录的 `my_backend.py`，无需自行创建。默认 `cfg.yaml` 已配置：
 
 ```yaml
 deployment:
@@ -105,7 +72,24 @@ deployment:
   pipeline_factory: "my_backend:create_pipeline"
 ```
 
-模型只加载一次。GroundingDINO负责初始化和重新定位，SAM逐帧更新，VLM只在初始化和故障确认时调用。
+模型后端位于 `failure_detection/backends.py`。Qwen3-VL 默认采用 NF4 4-bit 量化，同一进程复用模型；GroundingDINO 负责定位，SAM2.1 Video 使用独立的双相机时序状态逐帧更新。默认每 60 帧重新定位并重建跟踪状态以限制内存增长；跟丢时每 10 帧尝试重新定位。模型路径相对于配置文件目录解析，只读取本地权重。
+
+默认规则位于 `failure_detection/rules.py`：
+
+- `target_lost`：被操作对象在两个相机中持续不可见 2 秒时报告 `target_unobservable`。这表示观测丢失，不等于确认掉落；超过 `max_gap_seconds` 的采样间隔会重置持续时间。
+- `controller_fault`：机器人状态为 `fault`、`error`、`protective_stop` 或 `emergency_stop` 时报告故障；未提供状态时返回未知。
+
+规则确认异常后调用 VLM，持续异常不重复诊断；规则明确恢复正常后才重新触发。恢复建议只返回给客户端，不执行机器人动作。抓取失败、指定孔位放置等任务规则仍需要阶段信号或标定信息，不属于默认规则。
+
+可在 `stages.rules.plugins` 注册内置规则或 `package.module:RuleClass`，并通过 `options` 传入构造参数。自定义类实现 `update(context) -> RuleFinding`。
+
+先使用一张包含目标的真实图片验证完整 GPU 推理（单张图片重复作为双相机输入，仅用于检查接线，不验证运动跟踪精度）：
+
+```bash
+python scripts/check_backend.py --image /path/to/bottle.jpg --description "Pick up the bottle"
+```
+
+也可以使用 `--mode qwen` 单独检查规划和诊断，或使用 `--mode tracker --target bottle` 检查 GroundingDINO 和 SAM2 视频更新。自检会创建独立模型进程，请在服务器服务未运行时执行。默认服务器在启动时加载三个模型并保持 GPU 常驻，可能需要数分钟；客户端默认等待 600 秒。
 
 ## 4. 启动服务器
 
@@ -124,8 +108,10 @@ curl http://SERVER_IP:8000/health
 预期：
 
 ```json
-{"status":"ok","pipeline_factory_configured":true,"active_tasks":0}
+{"status":"ok","pipeline_factory_configured":true,"active_tasks":0,"models_ready":true,"resident_models":["vlm","grounding_dino","sam"],"device":"NVIDIA GeForce RTX 4090","allocated_mb":0}
 ```
+
+`allocated_mb` 会显示实际加载后显存值，上面的 0 仅为格式示意。`models_ready` 表示三个模型已加载并检查参数位于 GPU，不证明任务检测精度。默认最多一个任务；连接断开后释放任务跟踪状态，模型仍驻留供下次复用。创建后未连接的任务可通过 `DELETE /tasks/{task_session_id}` 删除。更新代码和依赖后需重启服务。
 
 ## 5. 本地发送实时图像
 
@@ -165,7 +151,7 @@ python scripts/stream_client.py \
 
 ## 6. 接入机器人状态
 
-客户端目前发送 `robot_state: null`。接入后改成普通JSON：
+独立相机客户端 `stream_client.py` 发送 `robot_state: null`；遥操作桥接已自动发送实际状态，见实时测试流程。其他运行环境可发送普通JSON：
 
 ```json
 {
@@ -184,6 +170,6 @@ python scripts/stream_client.py \
 
 - 创建任务返回503：检查 `pipeline_factory`、`my_backend.py`和模型加载错误。
 - 显存不足：Qwen使用4-bit量化，只运行一个任务，先降低到5 FPS。
-- 延迟持续增加：降低FPS，服务器只保留最新帧。
+- 延迟过大：降低FPS；客户端每发送一对图像就等待一次响应，不会主动无限堆积请求。相机驱动自身的缓冲需单独配置。
 - SAM跟丢目标：重新调用GroundingDINO定位。
 - 网络中断：本地停止任务或进入安全状态。

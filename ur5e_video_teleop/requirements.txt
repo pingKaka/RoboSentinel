@@ -1,0 +1,4 @@
+-e ../../lerobot_ur5e_isoteleop/lerobot_robot_ur5e
+-e ../../lerobot_ur5e_isoteleop/lerobot_teleoperator_ur5e
+-r ../requirements-client.txt
+-e .

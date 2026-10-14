@@ -1,0 +1,5 @@
+# Install in the existing teleoperation environment. Keep its GUI OpenCV build.
+numpy
+httpx
+websockets>=15
+PyYAML
