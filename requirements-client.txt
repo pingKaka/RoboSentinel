@@ -3,3 +3,4 @@ numpy
 httpx
 websockets>=15
 PyYAML
+Pillow

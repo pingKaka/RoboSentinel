@@ -45,6 +45,8 @@ class StreamObservation:
     frames: dict[str, Frame]
     robot_state: dict[str, Any] | None = None
     synchronization: dict[str, float] = field(default_factory=dict)
+    manual_failure: bool = False
+    reset_diagnosis: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,7 @@ class TrackState:
     box_xyxy: tuple[float, float, float, float] | None = None
     mask: Any = None
     quality: float | None = None
+    contours: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -129,12 +129,19 @@ def create_app(config: dict[str, Any]) -> FastAPI:
                 frames = _frames(value["frames"], timestamp, session.next_frame_id)
                 session.next_frame_id += 1
                 started = time.perf_counter()
+                manual_failure = value.get("manual_failure", False)
+                reset_diagnosis = value.get("reset_diagnosis", False)
+                if not isinstance(manual_failure, bool) or not isinstance(reset_diagnosis, bool):
+                    raise ValueError("manual_failure and reset_diagnosis must be boolean")
                 update = await run_in_threadpool(session.pipeline.update, StreamObservation(
-                    timestamp, frames, value.get("robot_state"), value.get("synchronization", {})
+                    timestamp, frames, value.get("robot_state"), value.get("synchronization", {}), manual_failure,
+                    reset_diagnosis
                 ))
                 result = json_safe(update.to_dict())
                 result.update(record_type="update", task_session_id=session_id, frame_id=session.next_frame_id - 1)
                 result["robot_state_received"] = value.get("robot_state") is not None
+                result["manual_failure"] = manual_failure
+                result["reset_diagnosis"] = reset_diagnosis
                 result["server_processing_ms"] = round((time.perf_counter() - started) * 1000, 1)
                 result = await run_in_threadpool(session.store.write, result, frames)
                 await websocket.send_json(result)

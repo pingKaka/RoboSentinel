@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.buffer import TimeSeriesBuffer
-from .contracts import PipelineUpdate, RuleContext, SceneSnapshot, StreamObservation, Task
+from .contracts import PipelineUpdate, RuleContext, RuleFinding, RuleReport, SceneSnapshot, StreamObservation, Task
 from .interfaces import FailureDiagnoser, OnlineObjectTracker, RuleEngine, ScenePlanner
 
 
@@ -41,6 +41,18 @@ class StreamingRoboSentinel:
         context = RuleContext(
             self.task, self.plan, observation, perception, self.history.items()
         )
+        if observation.reset_diagnosis:
+            self._diagnosed_events.clear()
+            return PipelineUpdate(observation.timestamp_sec, perception,
+                                  RuleReport(observation.timestamp_sec, "reset", (), None), None)
+        if observation.manual_failure:
+            report = RuleReport(observation.timestamp_sec, "complete", (
+                RuleFinding("manual_failure", "confirmed", "operator_reported_failure", evidence={
+                    "source": "operator", "timestamp_sec": observation.timestamp_sec,
+                    "note": "Human requested diagnosis; failure was not verified by automatic rules.",
+                }),), True)
+            return PipelineUpdate(observation.timestamp_sec, perception, report,
+                                  self.diagnoser.diagnose(context, report))
         report = self.rules.update(context)
         confirmed = {item.rule_id for item in report.findings if item.status == "confirmed"}
         cleared = {item.rule_id for item in report.findings if item.status == "clear"}

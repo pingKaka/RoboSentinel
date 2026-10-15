@@ -101,6 +101,9 @@ video_teleop:
   preview: true
   sentinel:
     enabled: true
+    manual_failure_key: "f"
+    recover_key: "r"
+    dashboard_font: null
   teleop:
     control_mode: "isoteleop"
     dynamixel_config:

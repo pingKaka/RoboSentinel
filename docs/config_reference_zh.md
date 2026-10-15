@@ -49,7 +49,7 @@
 | client.log_level | 本地日志等级，例如 INFO、DEBUG、WARNING |
 
 服务端先写 results.jsonl 再回传，客户端再写自己的 results.jsonl。首条 initialized 含规划与初始感知，后续 update 含感知、规则、诊断。`server_processing_ms` 是流水线处理时间，不包含存盘/网络耗时。
-图片路径回传但图片不自动下载；默认不导出稠密掩码和原始 logits。写盘失败返回错误并终止会话，不发送成功结果。没有自动轮转清理，需监控磁盘空间。
+图片路径回传但图片不自动下载；结果包含 SAM 简化分割轮廓（最多 8 个外轮廓，忽略内部孔洞），本地在对应已发送帧上重绘；默认不导出稠密掩码和原始 logits。写盘失败返回错误并终止会话，不发送成功结果。没有自动轮转清理，需监控磁盘空间。
 
 ## 测试输入
 
@@ -73,9 +73,12 @@
 | --- | --- |
 | fps | 遥操作主循环目标频率 Hz，与 client.fps 分离 |
 | debug | 原调试模式，不保证所有执行器不动作 |
-| record_key / exit_key | MP4 录制切换键 / 退出键 |
+| record_key / exit_key | 检测与 MP4 录制的开始/停止键（默认空格）/ 退出键；每轮检测建立新会话 |
 | output_dir / preview | MP4 保存目录 / 是否显示相机预览 |
 | sentinel.enabled | 是否将遥操作观测送到检测服务；网络等参数统一取 client |
+| sentinel.manual_failure_key | 手动报告故障并直接请求 VLM 分析的键，默认 f；等待 STREAMING 后使用，按住不重复，不停止机器人 |
+| sentinel.recover_key | 默认 r，清除界面故障并重置自动诊断去重；故障持续存在时可再次报警，不控制机器人运动 |
+| sentinel.dashboard_font | 中文字体文件路径，null 时自动查找系统 Noto CJK / Droid / 微软雅黑；自定义建议绝对路径 |
 | teleop.control_mode | 主臂控制模式，目前 isoteleop |
 | teleop.dynamixel_config.port | 主臂串口路径 |
 | teleop.dynamixel_config.hardware_offsets | 主臂硬件标定偏置数组，保留原标定值和单位 |

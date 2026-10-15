@@ -1,5 +1,7 @@
 # RoboSentinel 服务器部署教程
 
+从全新环境开始的两端完整操作请看 [从零启动教程](start_from_zero_zh.md)。
+
 日常运行请优先看 [精简运行教程](system_walkthrough_zh.md)。参数已统一到根目录 `cfg.yaml`，见 [参数说明](config_reference_zh.md)；本文命令行参数仍可用作临时覆盖。服务端默认将结果保存至 `result/server/<会话ID>/results.jsonl` 后再回传，本地默认自动创建独立运行目录。
 
 遥操作接入、常驻模型、视频回放和实时测试请按 [实时检测测试流程](realtime_test_zh.md) 执行。
@@ -118,7 +120,8 @@ curl http://SERVER_IP:8000/health
 本地安装依赖：
 
 ```bash
-pip install numpy opencv-python-headless httpx websockets
+pip install -r requirements-client.txt
+pip install opencv-python
 ```
 
 查看相机编号：

@@ -25,6 +25,7 @@ class ObservationPacket:
     frames: dict[str, np.ndarray]
     robot_state: dict | None = None
     synchronization: dict | None = None
+    manual_failure: bool = False
 
 
 class LiveDetectionClient:
@@ -50,6 +51,8 @@ class LiveDetectionClient:
         self.record_observations = record_observations
         self._lock, self._stop = Lock(), Event()
         self._latest = None
+        self._manual = None
+        self._manual_busy = False
         self._thread = None
         self._loop = None
         self._task = None
@@ -57,6 +60,11 @@ class LiveDetectionClient:
         self.status = "idle"
         self.error = None
         self.latest_result = None
+        self.latest_visual = None
+        self.initial_result = None
+        self.latest_robot_state = None
+        self.fault_result = None
+        self._recover = Event()
         self.dropped = 0
         self.responses = 0
         self.diagnosed_rules = set()
@@ -70,7 +78,9 @@ class LiveDetectionClient:
 
     def submit(self, packet: ObservationPacket):
         if self._stop.is_set():
-            return
+            return False
+        if packet.manual_failure and (self.status != "streaming" or self._manual_busy):
+            return False
         if set(packet.frames) != {"external", "wrist"}:
             raise ValueError("Both external and wrist RGB frames are required")
         if not np.isfinite(packet.timestamp_sec) or packet.timestamp_sec <= self._last_submitted:
@@ -80,21 +90,31 @@ class LiveDetectionClient:
                 raise ValueError("Frames must be uint8 RGB HWC arrays")
         copy = ObservationPacket(packet.timestamp_sec, {k: v.copy() for k, v in packet.frames.items()},
                                  json.loads(json.dumps(packet.robot_state, allow_nan=False)),
-                                 dict(packet.synchronization or {}))
+                                 dict(packet.synchronization or {}), packet.manual_failure)
         with self._lock:
             self._last_submitted = packet.timestamp_sec
             self.dropped += self._latest is not None
-            self._latest = copy
+            if packet.manual_failure:
+                self._manual, self._latest, self._manual_busy = copy, None, True
+            else:
+                self._latest = copy
+        return True
 
-    def close(self):
+    def close(self, wait=True):
         self._stop.set()
         if self._loop is not None and self._task is not None:
             try:
                 self._loop.call_soon_threadsafe(self._task.cancel)
             except RuntimeError:
                 pass
-        if self._thread is not None:
+        if wait and self._thread is not None:
             self._thread.join(timeout=12)
+
+    def recover(self):
+        if self.status != "streaming" or self._manual_busy:
+            return False
+        self._recover.set()
+        return True
 
     def _run(self):
         try:
@@ -112,7 +132,10 @@ class LiveDetectionClient:
     async def _next(self):
         while not self._stop.is_set():
             with self._lock:
-                packet, self._latest = self._latest, None
+                if self._manual is not None:
+                    packet, self._manual = self._manual, None
+                else:
+                    packet, self._latest = self._latest, None
             if packet is not None:
                 return packet
             await asyncio.sleep(0.01)
@@ -121,7 +144,8 @@ class LiveDetectionClient:
     def _encode(self, packet):
         return {"timestamp_sec": packet.timestamp_sec,
                 "frames": {k: encode_jpeg(np.ascontiguousarray(v[:, :, ::-1]), self.jpeg_quality) for k, v in packet.frames.items()},
-                "robot_state": packet.robot_state, "synchronization": packet.synchronization or {}}
+                "robot_state": packet.robot_state, "synchronization": packet.synchronization or {},
+                "manual_failure": packet.manual_failure}
 
     async def _main(self):
         self._loop, self._task = asyncio.get_running_loop(), asyncio.current_task()
@@ -133,14 +157,17 @@ class LiveDetectionClient:
                             if self.record_observations else None)
             try:
                 async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as http:
-                    packet = self._encode(await self._next())
+                    source = await self._next()
+                    packet = self._encode(source)
                     self.status = "initializing"
                     response = await http.post(self.server + "/tasks", json={**packet, "task_id": self.task_id,
                                                                             "description": self.description})
                     response.raise_for_status()
                     session_id = response.json()["task_session_id"]
                     initial = response.json().get("initial_result")
+                    self.initial_result = initial
                     if initial is not None:
+                        self.latest_visual = (initial, source.frames)
                         results.write(json.dumps(initial, ensure_ascii=False) + "\n")
                         results.flush()
                     if observations:
@@ -153,7 +180,11 @@ class LiveDetectionClient:
                         self.status = "streaming"
                         logger.warning("[Sentinel] STREAMING session=%s; logs=%s", session_id, self.output_dir)
                         while not self._stop.is_set():
-                            packet = self._encode(await self._next())
+                            source = await self._next()
+                            packet = self._encode(source)
+                            if self._recover.is_set() and not source.manual_failure:
+                                packet["reset_diagnosis"] = True
+                                self._recover.clear()
                             started = time.monotonic()
                             await ws.send(json.dumps(packet, allow_nan=False))
                             result = json.loads(await asyncio.wait_for(ws.recv(), self.timeout))
@@ -178,6 +209,14 @@ class LiveDetectionClient:
                                                             if finding.get("status") == "confirmed")
                                 logger.warning("[Sentinel] DIAGNOSIS %s", json.dumps(result["diagnosis"], ensure_ascii=False))
                             self.latest_result = result
+                            self.latest_visual = (result, source.frames)
+                            self.latest_robot_state = source.robot_state
+                            if result.get("reset_diagnosis"):
+                                self.fault_result = None
+                            if result.get("rules", {}).get("failure_detected") and (self.fault_result is None or result.get("diagnosis")):
+                                self.fault_result = result
+                            if packet["manual_failure"]:
+                                self._manual_busy = False
                             await asyncio.sleep(max(0, self.interval - (time.monotonic() - started)))
             finally:
                 if observations:

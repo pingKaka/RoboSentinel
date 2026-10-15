@@ -30,7 +30,7 @@ python -m unittest discover -s failure_detection/tests -v
 
 详细流程见 [项目流程](docs/pipeline.md)。
 
-首次运行推荐阅读 [完整运行教程（通俗版）](docs/system_walkthrough_zh.md)，包含任务创建时机、启动顺序、视频测试、真机操作和结果说明。
+首次安装请阅读 [从零启动完整教程](docs/start_from_zero_zh.md)，包含两端环境、权重下载、驱动与标定、联网、回放、可视化遥操作及结果查看。已有环境的简短操作见 [运行速查](docs/system_walkthrough_zh.md)。
 
 运行参数统一在根目录 `cfg.yaml`，见 [逐项参数说明](docs/config_reference_zh.md)；增加检测逻辑见 [规则扩展](docs/rules_zh.md)。服务端先保存结果再回传，本地也自动保存独立实验记录。
 
@@ -39,3 +39,5 @@ python -m unittest discover -s failure_detection/tests -v
 下一步测试请直接按 [遥操作与服务器实时检测测试](docs/realtime_test_zh.md)：启动服务器常驻模型，先回放视频验证，再运行本地遥操作自动上传图像与状态。相同观测接口可用于后续 VLA 环境。
 
 首次上传或更新GitHub见 [GitHub上传教程](docs/github_upload_zh.md)。
+
+codex resume 01a13a7b-3c6c-7f62-810a-e89cf4873a0a

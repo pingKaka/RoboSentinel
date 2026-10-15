@@ -164,6 +164,7 @@ class OnlineTracker:
 
     def update(self, observation):
         import torch
+        import cv2
         tracks = []
         with _LOCK, torch.inference_mode():
             for camera, frame in observation.frames.items():
@@ -173,6 +174,7 @@ class OnlineTracker:
                         or (state["lost"] and state["index"] % self.retry_frames == 0)):
                     state = self.cameras[camera] = self.seed(image)
                 visible = {}
+                contours_by_target = {}
                 if state["targets"]:
                     inputs = self.sp(images=image, return_tensors="pt").to("cuda")
                     output = self.sam(inference_session=state["session"], frame_idx=state["index"], frame=inputs.pixel_values[0])
@@ -181,10 +183,16 @@ class OnlineTracker:
                         ys, xs = np.where(mask[0].detach().cpu().numpy() > 0)
                         if len(xs) >= self.min_mask_pixels:
                             visible[target] = (float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1))
+                            binary = (mask[0].detach().cpu().numpy() > 0).astype(np.uint8)
+                            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            contours_by_target[target] = [cv2.approxPolyDP(c, 2.0, True).reshape(-1, 2).tolist()
+                                                          for c in sorted(contours, key=cv2.contourArea, reverse=True)[:8]
+                                                          if cv2.contourArea(c) >= 4]
                 for target in self.plan.targets:
                     box = visible.get(target.target_id)
-                    tracks.append(TrackState(target.target_id, camera, box is not None, box))
+                    tracks.append(TrackState(target.target_id, camera, box is not None, box,
+                                             contours=contours_by_target.get(target.target_id, [])))
                 state["lost"] = len(visible) < len(self.plan.targets)
                 state["index"] += 1
-        # Keep dense masks inside SAM; history and network responses contain boxes only.
+        # Keep dense masks inside SAM; send boxes and simplified contours for visualization.
         return PerceptionUpdate(observation.timestamp_sec, "complete", tuple(tracks), "grounding_dino_sam2")
