@@ -11,6 +11,16 @@ from .pipeline.contracts import PerceptionUpdate, TrackState
 _LOCK = RLock()
 
 
+def box_iou(left, right):
+    x1, y1 = max(left[0], right[0]), max(left[1], right[1])
+    x2, y2 = min(left[2], right[2]), min(left[3], right[3])
+    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    left_area = max(0.0, left[2] - left[0]) * max(0.0, left[3] - left[1])
+    right_area = max(0.0, right[2] - right[0]) * max(0.0, right[3] - right[1])
+    union = left_area + right_area - intersection
+    return intersection / union if union else 0.0
+
+
 def rgb(image):
     # Transport uses OpenCV BGR; all model processors expect RGB.
     return Image.fromarray(np.ascontiguousarray(image[:, :, ::-1]))
@@ -61,38 +71,21 @@ class QwenBackend:
             text = self.processor.batch_decode(output[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
         return parse_json(text)
 
-    def plan_tracking_targets(self, payload):
-        result = self.infer(payload["frames"],
-            'Return only JSON: {"targets": [{"target_id": "unique_id", "name": "English visual noun phrase", '
-            '"role": "manipulated_object|destination|gripper"}]}. Select at most 4 task-relevant visible objects. '
-            'Use specific visual attributes to distinguish objects. Do not invent invisible objects.',
-            {"task": payload["task"]})
-        targets = result.get("targets")
-        if not isinstance(targets, list) or not 1 <= len(targets) <= 4:
-            raise ValueError("VLM must produce 1 to 4 tracking targets")
-        ids = set()
-        for target in targets:
-            if not isinstance(target, dict) or any(not isinstance(target.get(k), str) or not target[k].strip()
-                                                  for k in ("target_id", "name", "role")):
-                raise ValueError("Invalid tracking target")
-            if target["target_id"] in ids:
-                raise ValueError("Duplicate tracking target ID")
-            if target["role"] not in {"manipulated_object", "destination", "gripper"}:
-                raise ValueError("Unknown tracking target role")
-            ids.add(target["target_id"])
-        return result
-
-    def diagnose_failure(self, payload):
-        evidence = {k: v for k, v in payload.items() if k != "current_frames"}
-        result = self.infer(payload["current_frames"],
-            'Return only JSON with failure_analysis (Chinese string) and recovery_suggestions (list of Chinese strings). '
-            'Explain evidence and uncertainty. Tracking loss does not prove a dropped object. '
-            'Suggestions are for human review, not robot commands.', evidence)
-        if (not isinstance(result.get("failure_analysis"), str)
-                or not isinstance(result.get("recovery_suggestions"), list)
-                or any(not isinstance(item, str) for item in result["recovery_suggestions"])):
-            raise ValueError("Invalid VLM diagnosis")
-        return result
+    def plan_monitoring(self, payload):
+        correction = payload.get("validation_error")
+        instruction = '''Return only one JSON object for a robot failure monitor.
+Top level: {"targets": [...], "rule_package": {"schema_version":"1.0.0", "task_type":"pick|transport|place|pick_and_place|other", "rules":[...]}}.
+Each target is {"target_id":"lowercase_id", "name":"specific English visual phrase", "role":"manipulated_object|destination|gripper"}; use 1-4 visible task-relevant targets.
+Each rule requires: rule_id, failure_type, constraint_type (during_execution|upon_completion), description, feature_bindings, activation, condition, duration_sec, minimum_samples, unknown_policy="unknown", explanation_template.
+Each feature binding is {"alias":"lowercase_id", "feature":"catalog name", "entity":"target_id" OR "entities":["a","b"], "camera":"camera name when required", "reason":"why this evidence tests the constraint"}.
+Feature catalog: entity.visible_any, entity.missing_all_cameras, entity.visible_camera_count, entity.camera.visibility, entity.camera.mask_centroid_x, entity.camera.mask_centroid_y, entity.camera.mask_area_ratio, entity.camera.mask_perimeter_normalized, entity.camera.mask_component_count, entity.camera.mask_compactness, entity.camera.tracking_quality, relation.delta_x, relation.delta_y, relation.centroid_distance, relation.mask_iou, relation.mask_intersection_ratio, relation.mask_coverage_a, relation.mask_coverage_b, robot.tcp_x, robot.tcp_y, robot.tcp_z, robot.gripper_position_normalized.
+Expressions may only be {"op":"eq|gt|lt","feature":"alias","value":...}, {"op":"between","feature":"alias","min":...,"max":...}, {"op":"changed","feature":"alias","delta":...,"direction":"any|increase|decrease","window_sec":...}, {"op":"stable","feature":"alias","tolerance":...,"window_sec":...}, or {"op":"all|any","args":[expressions]}.
+Generate only task- and scene-relevant, explainable rules. Prefer target_lost, grasp_failed, and place_failed where applicable. Missing evidence is unknown. Do not emit Python or prose outside JSON.'''
+        evidence = {"task": payload["task"], "available_cameras": sorted(payload["frames"])}
+        if correction:
+            evidence["previous_output_error"] = correction
+            evidence["instruction"] = "Correct the schema error and regenerate the full object."
+        return self.infer(payload["frames"], instruction, evidence)
 
 
 @lru_cache(maxsize=1)
@@ -128,10 +121,13 @@ class OnlineTracker:
         self.min_mask_pixels = int(options.get("min_mask_pixels", 16))
         self.reset_frames = int(options.get("reseed_frames", 60))
         self.retry_frames = int(options.get("redetect_frames", 10))
+        self.duplicate_box_iou = float(options.get("duplicate_box_iou", 0.95))
         if not 0 <= self.threshold <= 1 or not 0 <= self.text_threshold <= 1:
             raise ValueError("Detection thresholds must be in [0, 1]")
         if min(self.min_mask_pixels, self.reset_frames, self.retry_frames) < 1:
             raise ValueError("Mask size and tracking intervals must be positive")
+        if not 0 <= self.duplicate_box_iou <= 1:
+            raise ValueError("duplicate_box_iou must be in [0, 1]")
         self.cameras = {}
 
     def initialize(self, plan, scene):
@@ -141,7 +137,7 @@ class OnlineTracker:
 
     def seed(self, image):
         import torch
-        boxes, targets = [], []
+        boxes, targets, qualities = [], [], {}
         for target in self.plan.targets:
             inputs = self.dp(images=image, text=target.name.lower().rstrip(".") + ".", return_tensors="pt").to("cuda")
             output = self.dino(**inputs)
@@ -149,10 +145,14 @@ class OnlineTracker:
                 output, inputs.input_ids, threshold=self.threshold, text_threshold=self.text_threshold,
                 target_sizes=[(image.height, image.width)],
             )[0]
-            if len(result["scores"]):
-                index = result["scores"].argmax().item()
-                boxes.append(result["boxes"][index].tolist())
+            for index in result["scores"].argsort(descending=True).tolist():
+                candidate = result["boxes"][index].tolist()
+                if any(box_iou(candidate, assigned) >= self.duplicate_box_iou for assigned in boxes):
+                    continue
+                boxes.append(candidate)
                 targets.append(target.target_id)
+                qualities[target.target_id] = float(result["scores"][index].item())
+                break
         session = self.sp.init_video_session(inference_device="cuda", dtype=torch.float32,
                                             inference_state_device="cpu", video_storage_device="cpu")
         if boxes:
@@ -160,7 +160,8 @@ class OnlineTracker:
                 session, frame_idx=0, obj_ids=list(range(len(targets))), input_boxes=[boxes],
                 original_size=(image.height, image.width),
             )
-        return {"session": session, "targets": targets, "index": 0, "lost": False, "size": image.size}
+        return {"session": session, "targets": targets, "qualities": qualities,
+                "index": 0, "lost": False, "size": image.size}
 
     def update(self, observation):
         import torch
@@ -174,6 +175,7 @@ class OnlineTracker:
                         or (state["lost"] and state["index"] % self.retry_frames == 0)):
                     state = self.cameras[camera] = self.seed(image)
                 visible = {}
+                masks_by_target = {}
                 contours_by_target = {}
                 if state["targets"]:
                     inputs = self.sp(images=image, return_tensors="pt").to("cuda")
@@ -184,15 +186,33 @@ class OnlineTracker:
                         if len(xs) >= self.min_mask_pixels:
                             visible[target] = (float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1))
                             binary = (mask[0].detach().cpu().numpy() > 0).astype(np.uint8)
+                            masks_by_target[target] = binary
                             contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                             contours_by_target[target] = [cv2.approxPolyDP(c, 2.0, True).reshape(-1, 2).tolist()
                                                           for c in sorted(contours, key=cv2.contourArea, reverse=True)[:8]
                                                           if cv2.contourArea(c) >= 4]
+                ambiguous = set()
+                visible_targets = list(visible)
+                for left_index, left in enumerate(visible_targets):
+                    for right in visible_targets[left_index + 1:]:
+                        if box_iou(visible[left], visible[right]) < self.duplicate_box_iou:
+                            continue
+                        left_score = state["qualities"].get(left, 0.0)
+                        right_score = state["qualities"].get(right, 0.0)
+                        ambiguous.add(right if left_score >= right_score else left)
+                for target in ambiguous:
+                    visible.pop(target, None)
+                    masks_by_target.pop(target, None)
+                    contours_by_target.pop(target, None)
                 for target in self.plan.targets:
                     box = visible.get(target.target_id)
                     tracks.append(TrackState(target.target_id, camera, box is not None, box,
-                                             contours=contours_by_target.get(target.target_id, [])))
+                                             mask=masks_by_target.get(target.target_id),
+                                             quality=state["qualities"].get(target.target_id),
+                                             contours=contours_by_target.get(target.target_id, []),
+                                             observation_valid=(target.target_id in state["targets"]
+                                                                and target.target_id not in ambiguous)))
                 state["lost"] = len(visible) < len(self.plan.targets)
                 state["index"] += 1
-        # Keep dense masks inside SAM; send boxes and simplified contours for visualization.
+        # Dense masks feed the standard feature layer; transport serializes only their shape and dtype.
         return PerceptionUpdate(observation.timestamp_sec, "complete", tuple(tracks), "grounding_dino_sam2")

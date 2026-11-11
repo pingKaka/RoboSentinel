@@ -60,10 +60,11 @@ class LiveClientTests(unittest.TestCase):
         with patch("failure_detection.transport.teleop_adapter.time.monotonic", return_value=12.1):
             packet = teleop_packet(obs, robot, 10, 11.9, 12)
         self.assertEqual(packet.timestamp_sec, 2)
-        self.assertEqual(packet.robot_state["controller_state"], "protective_stop")
-        self.assertEqual(packet.robot_state["tcp_pose"], [1, 2, 3, 4, 5, 6])
-        self.assertEqual(packet.robot_state["teleop_ee_pose"], [0.1] * 6)
-        self.assertNotIn("gripper_width", packet.robot_state)
+        self.assertEqual(packet.robot_state["tcp_position"], [1, 2, 3])
+        self.assertEqual(packet.robot_state["tcp_position_frame"], "base")
+        self.assertEqual(packet.robot_state["gripper_position_normalized"], 0.5)
+        self.assertNotIn("controller_state", packet.robot_state)
+        self.assertNotIn("tcp_speed", packet.robot_state)
 
     def test_latest_slot_owns_images_and_validates_time(self):
         image = np.zeros((8, 8, 3), dtype=np.uint8)
@@ -82,13 +83,12 @@ class LiveClientTests(unittest.TestCase):
 
         def update(observation):
             time.sleep(0.03)
-            fault = (observation.robot_state or {}).get("controller_state") == "fault"
+            fault = (observation.robot_state or {}).get("test_fault") is True
             return SimpleNamespace(to_dict=lambda: {
                 "timestamp_sec": observation.timestamp_sec,
                 "perception": {"tracks": []},
-                "rules": {"failure_detected": fault, "findings": [{"rule_id": "controller_fault",
-                           "status": "confirmed" if fault else "clear"}]},
-                "diagnosis": {"failure_analysis": "test"} if fault else None})
+                "rules": {"failure_detected": fault, "findings": [{"rule_id": "test_fault",
+                           "status": "confirmed" if fault else "clear"}]}})
 
         pipeline.update.side_effect = update
         sock = socket.socket()
@@ -107,37 +107,30 @@ class LiveClientTests(unittest.TestCase):
                 client.submit(ObservationPacket(0, {"external": image, "wrist": image}))
                 wait_until(lambda: client.status == "streaming")
                 for i in range(1, 101):
-                    client.submit(ObservationPacket(i / 100, {"external": image, "wrist": image}, {"controller_state": "normal"}))
+                    client.submit(ObservationPacket(i / 100, {"external": image, "wrist": image}, {"test_fault": False}))
                 wait_until(lambda: client.latest_result is not None and client.latest_result["timestamp_sec"] == 1)
                 client.close()
                 self.assertIsNone(client.error)
                 self.assertFalse(client._thread.is_alive())
                 records = [json.loads(line) for line in (Path(directory) / "observations.jsonl").read_text().splitlines()]
                 self.assertEqual(records[0]["kind"], "initial")
-                self.assertEqual(records[-1]["robot_state"]["controller_state"], "normal")
+                self.assertFalse(records[-1]["robot_state"]["test_fault"])
                 self.assertGreater(client.dropped, 0)
                 process = subprocess.run([sys.executable, "scripts/replay_detection.py", "--server", f"http://127.0.0.1:{port}",
                                           "--observations", str(Path(directory) / "observations.jsonl"),
                                           "--output", str(Path(directory) / "replay")], capture_output=True, text=True, timeout=20)
                 self.assertEqual(process.returncode, 0, process.stderr)
                 self.assertIn("PASS", process.stdout)
-                fault_replay = subprocess.run([sys.executable, "scripts/replay_detection.py", "--server", f"http://127.0.0.1:{port}",
-                                               "--observations", str(Path(directory) / "observations.jsonl"),
-                                               "--simulate-fault-at", "0.5", "--output", str(Path(directory) / "fault")],
-                                              capture_output=True, text=True, timeout=20)
-                self.assertEqual(fault_replay.returncode, 0, fault_replay.stderr)
-                self.assertIn("DIAGNOSIS", fault_replay.stderr)
                 import yaml
                 from project_config import DEFAULT_CONFIG, load_project_config
                 config, _ = load_project_config(DEFAULT_CONFIG)
                 config["client"].update(server=f"http://127.0.0.1:{port}", output_dir="configured_results")
-                config["replay"].update(observations="observations.jsonl", simulate_fault_at=0.5)
+                config["replay"].update(observations="observations.jsonl")
                 config_path = Path(directory) / "test.yaml"
                 config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
                 configured = subprocess.run([sys.executable, "scripts/replay_detection.py", "--config", str(config_path)],
                                             capture_output=True, text=True, timeout=20)
                 self.assertEqual(configured.returncode, 0, configured.stderr)
-                self.assertIn("DIAGNOSIS", configured.stderr)
                 self.assertEqual(len(list((Path(directory) / "configured_results").glob("replay/*/results.jsonl"))), 1)
                 entered, completed = threading.Event(), threading.Event()
 

@@ -92,6 +92,8 @@ def create_app(config: dict[str, Any]) -> FastAPI:
                 "task_id": request.task_id, "description": request.description,
                 "frame_id": 0, "timestamp_sec": request.timestamp_sec,
                 "tracking_plan": asdict(pipeline.plan) if is_dataclass(pipeline.plan) else None,
+                "rule_package": asdict(pipeline.rule_package)
+                if is_dataclass(getattr(pipeline, "rule_package", None)) else None,
                 "perception": asdict(initial_perception) if is_dataclass(initial_perception) else None,
             }
             initial = store.write(json_safe(initial), frames)
@@ -130,18 +132,15 @@ def create_app(config: dict[str, Any]) -> FastAPI:
                 session.next_frame_id += 1
                 started = time.perf_counter()
                 manual_failure = value.get("manual_failure", False)
-                reset_diagnosis = value.get("reset_diagnosis", False)
-                if not isinstance(manual_failure, bool) or not isinstance(reset_diagnosis, bool):
-                    raise ValueError("manual_failure and reset_diagnosis must be boolean")
+                if not isinstance(manual_failure, bool):
+                    raise ValueError("manual_failure must be boolean")
                 update = await run_in_threadpool(session.pipeline.update, StreamObservation(
-                    timestamp, frames, value.get("robot_state"), value.get("synchronization", {}), manual_failure,
-                    reset_diagnosis
+                    timestamp, frames, value.get("robot_state"), value.get("synchronization", {}), manual_failure
                 ))
                 result = json_safe(update.to_dict())
                 result.update(record_type="update", task_session_id=session_id, frame_id=session.next_frame_id - 1)
                 result["robot_state_received"] = value.get("robot_state") is not None
                 result["manual_failure"] = manual_failure
-                result["reset_diagnosis"] = reset_diagnosis
                 result["server_processing_ms"] = round((time.perf_counter() - started) * 1000, 1)
                 result = await run_in_threadpool(session.store.write, result, frames)
                 await websocket.send_json(result)

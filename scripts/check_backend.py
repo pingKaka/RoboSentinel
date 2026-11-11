@@ -38,10 +38,7 @@ def main():
     scene = SceneSnapshot(0, frames)
     if args.mode == "qwen":
         qwen = configured_qwen(paths, config.get("backend", {}))
-        print(qwen.plan_tracking_targets({"task": args.description, "frames": {k: image for k in frames}}))
-        print(qwen.diagnose_failure({"task": args.description, "current_frames": {k: image for k in frames},
-                                    "rule_report": {"failure_type": "test_event", "note": "Diagnostic smoke test; no actual failure established"},
-                                    "current_tracks": {}, "robot_state": None}))
+        print(qwen.plan_monitoring({"task": args.description, "frames": {k: image for k in frames}}))
         return
     if args.mode == "tracker":
         pipeline = create_online_tracker(paths["grounding_dino"], paths["sam"], config.get("backend", {}))

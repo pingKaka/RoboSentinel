@@ -1,0 +1,78 @@
+# RoboSentinel streaming pipeline.
+
+version: 4
+
+client:
+  timeout_sec: 600
+  jpeg_quality: 85
+  ws_max_size: 16777216
+  ping_timeout_sec: 120
+  log_level: "INFO"
+
+streams:
+  external_camera:
+    provider: null
+  wrist_camera:
+    provider: null
+  robot_state:
+    enabled: true
+    provider: null
+  max_timestamp_delta_sec: 0.05
+
+stages:
+  planner:
+    backend: "qwen3_vl"
+  tracker:
+    backend: "grounding_dino_sam_online"
+  features:
+    schema_version: "2.0.0"
+  rules:
+    mode: "generated"
+    schema_version: "1.0.0"
+    max_generation_attempts: 2
+    max_rules: 6
+runtime:
+  buffer_seconds: 15.0
+
+deployment:
+  host: "0.0.0.0"
+  port: 8000
+  max_tasks: 1
+  # Python factory path: package.module:function
+  # The function receives the project config and returns StreamingRoboSentinel.
+  pipeline_factory: "my_backend:create_pipeline"
+  preload_factory: "my_backend:preload_models"
+
+backend:
+  quantize_vlm: true
+  vlm_max_new_tokens: 1536
+  vlm_image_max_side: 768
+  box_threshold: 0.3
+  text_threshold: 0.25
+  min_mask_pixels: 16
+  reseed_frames: 60
+  redetect_frames: 10
+  duplicate_box_iou: 0.95
+
+outputs:
+  server_dir: "result/server"
+  console: true
+  save_annotated_frames: false
+  fsync: false
+
+replay:
+  observations: null
+  external: "ur5e_video_teleop/videos/exterior_1.mp4"
+  wrist: "ur5e_video_teleop/videos/wrist_1.mp4"
+  seconds: 30
+
+camera_client:
+  external: "0"
+  wrist: "2"
+
+check:
+  image: null
+  mode: "full"
+  target: "bottle"
+  frames: 3
+  interval_sec: 0.1

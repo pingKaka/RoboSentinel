@@ -1,6 +1,11 @@
 __pycache__/
 *.py[cod]
 .cache/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
 
 # Model weights and captured videos are transferred separately, not through Git.
 checkpoint/

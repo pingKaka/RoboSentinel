@@ -73,7 +73,6 @@ def main():
     parser.add_argument("--fps", type=float)
     parser.add_argument("--seconds", type=float)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--simulate-fault-at", type=float, help="Replay-only synthetic controller fault at this second")
     args = parser.parse_args()
     config, root = load_project_config(args.config)
     client = client_settings(config, root, "replay")
@@ -87,8 +86,7 @@ def main():
             args.external = args.wrist = None
     for key, value in {"server": client.get("server", "http://127.0.0.1:8000"),
                        "description": client["description"], "fps": client.get("fps", 5),
-                       "seconds": replay.get("seconds", 30), "output": client["output_dir"],
-                       "simulate_fault_at": replay.get("simulate_fault_at")}.items():
+                       "seconds": replay.get("seconds", 30), "output": client["output_dir"]}.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
     if args.seconds <= 0 or args.fps <= 0:
@@ -128,8 +126,6 @@ def main():
             if state is not None:
                 state["original_timestamp_sec"] = state.get("timestamp_sec")
                 state["timestamp_sec"] = stamp
-            if args.simulate_fault_at is not None and stamp >= args.simulate_fault_at:
-                state = {**(state or {}), "timestamp_sec": stamp, "controller_state": "fault", "synthetic": True}
             client.submit(ObservationPacket(stamp, packet.frames, state, packet.synchronization))
             previous, final = stamp, stamp
             if client.error:
@@ -137,11 +133,7 @@ def main():
         if final is None:
             raise ValueError("Recording too short to send an update")
         wait_for(client, lambda: client.latest_result is not None and client.latest_result["timestamp_sec"] >= final, timeout)
-        if args.simulate_fault_at is not None and "controller_fault" not in client.diagnosed_rules:
-            raise RuntimeError("No controller fault diagnosis received; check clip duration and enabled rules")
         print(f"PASS: {client.responses} responses; output={args.output}")
-        if args.simulate_fault_at is not None:
-            print("Synthetic controller state was used only in replay; inspect results.jsonl for diagnosis.")
     finally:
         packets.close()
         client.close()

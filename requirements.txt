@@ -1,4 +1,4 @@
-# Runtime dependencies for scripts/infer_video.py.
+# Server-side detection and model inference dependencies.
 # For GPU inference, install the PyTorch build matching the host CUDA driver
 # before this file. The environment currently verified in this project uses
 # Python 3.10 and torch 2.11.0+cu128.
@@ -6,6 +6,7 @@ PyYAML
 av
 accelerate
 bitsandbytes
+numpy
 opencv-python-headless
 Pillow
 qwen-vl-utils

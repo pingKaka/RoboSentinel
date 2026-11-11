@@ -11,7 +11,10 @@ from failure_detection.transport.server import create_app
 class TransportTests(unittest.TestCase):
     def test_task_limit_stream_result_and_disconnect_cleanup(self):
         pipeline = Mock()
-        pipeline.update.return_value.to_dict.return_value = {"diagnosis": None}
+        pipeline.update.return_value.to_dict.return_value = {
+            "timestamp_sec": 1, "perception": {"tracks": []},
+            "rules": {"failure_detected": False, "findings": []},
+        }
         jpeg = encode_jpeg(np.zeros((8, 8, 3), dtype=np.uint8))
         request = {"task_id": "test", "description": "move bottle", "timestamp_sec": 0,
                    "frames": {"external": jpeg, "wrist": jpeg}}
@@ -24,7 +27,8 @@ class TransportTests(unittest.TestCase):
                 with client.websocket_connect(f"/tasks/{session}/stream") as ws:
                     ws.send_json({"timestamp_sec": 1, "frames": request["frames"]})
                     result = ws.receive_json()
-                    self.assertIsNone(result["diagnosis"])
+                    self.assertNotIn("diagnosis", result)
+                    self.assertFalse(result["rules"]["failure_detected"])
                     self.assertIn("server_processing_ms", result)
                     self.assertEqual(client.delete(f"/tasks/{session}").status_code, 409)
                 self.assertEqual(client.get("/health").json()["active_tasks"], 0)

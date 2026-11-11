@@ -1,0 +1,61 @@
+video_teleop:
+  fps: 15
+  debug: false
+  record_key: "space"
+  exit_key: "esc"
+  output_dir: "ur5e_video_teleop/videos"
+  preview: true
+  sentinel:
+    enabled: true
+    manual_failure_key: "f"
+    dashboard_font: null
+  teleop:
+    control_mode: "isoteleop"
+    dynamixel_config:
+      port: "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0"
+      hardware_offsets: [134.473, -178.593, -269.827, -275.8, -187.823, -458.086]
+      use_gripper: &use_gripper true
+      joint_ids: [1, 2, 3, 4, 5, 6]
+      joint_offsets: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      joint_signs: [1, 1, -1, 1, 1, 1]
+      gripper_config: [7, 2.60, 3.54]
+  robot:
+    ip: "192.168.131.12"
+    use_gripper: *use_gripper
+    close_threshold: 0.7
+    gripper_bin_threshold: 0.98
+    gripper_port: "/dev/ur5e_left_gripper"
+    gripper_reverse: false
+    gripper_force: 70
+    gripper_speed: 60
+    control_space: "tcp_force"
+    tcp_force:
+      reference_frame: "tcp"
+    tcp_position:
+      reference_frame: "base"
+      speed: 0.5
+      acceleration: 0.5
+      servo_time: 0.1
+      lookahead_time: 0.1
+      gain: 300
+    robot_urdf_path: assets/urdf/ur5e.urdf
+    force_mode:
+      kp: 2000
+      kd: 200
+      kp_rot: 4000
+      kd_rot: 800
+      rtde_freq: 125
+      select_vector: [1, 1, 1, 1, 1, 1]
+      force_limit: [2, 2, 2, 2, 2, 2]
+      pos_delta: 0.2
+      vel_delta: 0.2
+      gain_scale: 1.5
+    joint_mode:
+      look_ahead_time: 0.2
+      dt: 0.002
+      gain: 100
+  cameras:
+    wrist_cam_serial: "349522070893"
+    exterior_cam_serial: "348522073968"
+    width: 424
+    height: 240

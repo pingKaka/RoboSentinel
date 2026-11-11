@@ -80,9 +80,10 @@ class VideoTeleopConfig:
             root = yaml.safe_load(f)
         if "project_config" in root:
             return cls.from_yaml(path.parent / root["project_config"])
-        if "client" in root:
+        if "client" in root or "include" in root:
             sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-            from project_config import client_settings, resolve_path
+            from project_config import client_settings, resolve_path, load_project_config
+            root, _ = load_project_config(path)
             settings = client_settings(root, path.parent, "teleop")
             settings.update(root["video_teleop"].get("sentinel", {}))
             root["video_teleop"]["sentinel"] = settings
@@ -150,15 +151,12 @@ class VideoTeleopConfig:
 
 
 class ToggleKeyState:
-    def __init__(self, record_key: str, exit_key: str, failure_key: str = "f", recover_key: str = "r"):
+    def __init__(self, record_key: str, exit_key: str, failure_key: str = "f"):
         self.record_key = record_key
         self.exit_key = exit_key
         self.failure_key = failure_key
         self.failure_key_down = False
         self.failure_requested = Event()
-        self.recover_key = recover_key
-        self.recover_key_down = False
-        self.recover_requested = Event()
         self.recording = False
         self.record_key_down = False
         self.stop_requested = False
@@ -182,9 +180,6 @@ class ToggleKeyState:
         if name == self.failure_key and not self.failure_key_down:
             self.failure_key_down = True
             self.failure_requested.set()
-        if name == self.recover_key and not self.recover_key_down:
-            self.recover_key_down = True
-            self.recover_requested.set()
         if name == self.record_key and not self.record_key_down:
             self.record_key_down = True
             self.recording = not self.recording
@@ -195,8 +190,6 @@ class ToggleKeyState:
         return None
 
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode) -> None:
-        if normalize_key(key) == self.recover_key:
-            self.recover_key_down = False
         if normalize_key(key) == self.failure_key:
             self.failure_key_down = False
         if normalize_key(key) == self.record_key:
@@ -364,8 +357,7 @@ def make_robot_and_teleop(cfg: VideoTeleopConfig) -> tuple[Any, Any]:
 
 def run_video_teleop(cfg: VideoTeleopConfig) -> None:
     failure_key = str(cfg.sentinel.get("manual_failure_key", "f")).lower()
-    recover_key = str(cfg.sentinel.get("recover_key", "r")).lower()
-    if not failure_key or not recover_key or len({cfg.record_key, cfg.exit_key, failure_key, recover_key}) != 4 or "q" in (failure_key, recover_key):
+    if not failure_key or len({cfg.record_key, cfg.exit_key, failure_key}) != 3 or failure_key == "q":
         raise ValueError("Manual failure, recording and exit keys must differ; q is reserved for preview exit.")
 
     output_dir = cfg.output_dir
@@ -382,7 +374,7 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
     sentinel_adapter = None
     sentinel_origin = time.monotonic()
     last_sentinel_submit = -float("inf")
-    key_state = ToggleKeyState(cfg.record_key, cfg.exit_key, failure_key, recover_key)
+    key_state = ToggleKeyState(cfg.record_key, cfg.exit_key, failure_key)
     recorders = {
         "wrist_image": VideoSegmentRecorder(output_dir, "wrist_image", cfg.fps),
         "exterior_image": VideoSegmentRecorder(output_dir, "exterior_image", cfg.fps),
@@ -391,35 +383,24 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
     try:
         if cfg.sentinel.get("enabled", False):
             sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-            from failure_detection.transport.live_client import LiveDetectionClient
+            from failure_detection.transport.live_client import create_detection_client
             from failure_detection.transport.teleop_adapter import teleop_packet
             sentinel_adapter = teleop_packet
         if cfg.preview:
             sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-            from failure_detection.transport.dashboard import DetectionDashboard
-            dashboard = DetectionDashboard(cfg.sentinel.get("dashboard_font"))
-            cv2.namedWindow("RoboSentinel", cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-            cv2.resizeWindow("RoboSentinel", 1440, 846)
-            cv2.setMouseCallback("RoboSentinel", dashboard.mouse)
+            from failure_detection.transport.dashboard_process import DashboardProcess
+            dashboard = DashboardProcess(cfg.sentinel.get("dashboard_font"))
 
         def start_detection():
-            return LiveDetectionClient(
-                cfg.sentinel["server"], cfg.sentinel["description"],
-                task_id=cfg.sentinel.get("task_id", "teleop"),
-                fps=float(cfg.sentinel.get("fps", 5)),
-                output_dir=Path(cfg.sentinel.get("output_dir", "result/teleop")) / f"run_{run_index:03d}",
-                record_observations=cfg.sentinel.get("record_observations", True),
-                timeout=float(cfg.sentinel.get("timeout_sec", 600)),
-                jpeg_quality=int(cfg.sentinel.get("jpeg_quality", 85)),
-                ws_max_size=int(cfg.sentinel.get("ws_max_size", 2**24)),
-                ping_timeout=float(cfg.sentinel.get("ping_timeout_sec", 120)),
-            ).start()
+            settings = dict(cfg.sentinel)
+            settings["output_dir"] = Path(settings.get("output_dir", "result/teleop")) / f"run_{run_index:03d}"
+            return create_detection_client(settings).start()
         robot, teleop = make_robot_and_teleop(cfg)
         robot.connect()
         teleop.connect()
         robot.set_episode_reference_pose()
         key_state.start()
-        logger.info("[Sentinel] Press '%s' to report failure and request VLM analysis after STREAMING; this does not stop the robot.", failure_key)
+        logger.info("[Sentinel] Press '%s' to report a failure after STREAMING; this does not stop the robot.", failure_key)
 
         logger.info(
             "====== [READY] Press '%s' once to start detection and recording both cameras, "
@@ -429,6 +410,8 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
         )
 
         while not key_state.stop_requested:
+            if dashboard is not None and dashboard.quit_requested.is_set():
+                break
             t0 = time.perf_counter()
             action = teleop.get_action()
             robot.send_action(action)
@@ -449,10 +432,6 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
                     notice = "正在创建检测任务"
                 else:
                     notice = "正在结束上一轮检测，请稍候"
-            if key_state.recover_requested.is_set():
-                key_state.recover_requested.clear()
-                accepted = sentinel is not None and sentinel.recover()
-                notice = "已请求恢复检测；异常仍存在时会再次报警" if accepted else "无法恢复：请等待检测就绪和分析完成"
             manual_failure = key_state.failure_requested.is_set()
             if manual_failure:
                 key_state.failure_requested.clear()
@@ -466,9 +445,9 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
                                               capture_started, capture_finished, action)
                     accepted = sentinel.submit(replace(packet, manual_failure=manual_failure))
                     if manual_failure:
-                        notice = "人工故障已提交，等待分析" if accepted else "请求未接受：请等待检测就绪或上一条分析完成"
+                        notice = "人工故障已提交" if accepted else "请求未接受：请等待检测就绪或上一条报告完成"
                         logger.warning("[Sentinel] Manual failure %s", "queued with current observation" if accepted
-                                       else "rejected: wait for STREAMING and completion of previous manual analysis")
+                                       else "rejected: wait for STREAMING and completion of previous manual report")
                 except Exception:
                     logger.exception("[Sentinel] Observation rejected; teleoperation continues")
 
@@ -479,13 +458,11 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
                 recorders[camera_name].update(key_state.recording, observation[camera_name])
 
             if dashboard is not None:
-                preview = dashboard.render(
+                dashboard.render(
                     {"external": observation["exterior_image"], "wrist": observation["wrist_image"]},
-                    sentinel, key_state.recording, capture_finished - sentinel_origin, notice,
-                    (cfg.record_key, failure_key, recover_key, cfg.exit_key), task=cfg.sentinel)
-                cv2.imshow("RoboSentinel", preview)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                    sentinel, active=key_state.recording, now=capture_finished - sentinel_origin,
+                    notice=notice, keys=(cfg.record_key, failure_key, cfg.exit_key),
+                    task=cfg.sentinel)
 
             sleep_s = 1.0 / cfg.fps - (time.perf_counter() - t0)
             if sleep_s > 0:
@@ -497,10 +474,7 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
             recorder.close()
         key_state.stop()
         if dashboard is not None:
-            try:
-                cv2.destroyAllWindows()
-            except cv2.error:
-                logger.exception("Cannot close preview window")
+            dashboard.close()
         try:
             if robot is not None:
                 robot.disconnect()

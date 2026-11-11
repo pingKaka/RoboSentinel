@@ -31,9 +31,11 @@ def main() -> int:
     }
     summary = {
         "schema_version": 1,
-        "flow": ["vlm_initial_scene", "online_grounding_dino_sam", "streaming_rules", "event_vlm_diagnosis"],
+        "flow": ["vlm_initial_scene", "online_grounding_dino_sam", "standard_features", "streaming_rules"],
+        "feature_schema_version": config["stages"]["features"]["schema_version"],
         "models": models,
-        "rule_plugins": config["stages"]["rules"]["plugins"],
+        "rule_mode": config["stages"]["rules"]["mode"],
+        "rule_schema_version": config["stages"]["rules"]["schema_version"],
         "robot_state_enabled": config["streams"]["robot_state"]["enabled"],
         "status": "configured" if all(item["available"] for item in models.values()) else "missing_models",
     }

@@ -40,5 +40,8 @@ class TimeSeriesBuffer(Generic[T]):
         for item in items:
             self.append(item)
 
+    def clear(self) -> None:
+        self._items.clear()
+
     def __len__(self) -> int:
         return len(self._items)

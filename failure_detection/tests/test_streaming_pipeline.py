@@ -8,7 +8,7 @@ from failure_detection.pipeline import (
 )
 from failure_detection.pipeline.rule_engine import StreamingRuleEngine
 from failure_detection.stages import (
-    EventTriggeredVLMDiagnoser, OnlineGroundingSAMTracker, VLMScenePlanner,
+    OnlineGroundingSAMTracker, VLMScenePlanner,
 )
 from project_config import load_project_config
 
@@ -28,7 +28,7 @@ class EventRule:
     rule_id = "test_event"
 
     def update(self, context):
-        status = "confirmed" if context.observation.timestamp_sec >= 2.0 else "clear"
+        status = "confirmed" if context.snapshot.timestamp_sec >= 2.0 else "clear"
         return RuleFinding(self.rule_id, status, "test_failure" if status == "confirmed" else None)
 
 
@@ -38,25 +38,27 @@ class StreamingPipelineTest(unittest.TestCase):
         self.assertIn("streams", config)
         self.assertEqual(config["stages"]["tracker"]["backend"], "grounding_dino_sam_online")
 
-    def test_vlm_diagnosis_is_only_called_after_confirmed_event(self):
-        calls = []
+    def test_rule_report_is_the_final_detection_output(self):
         planner = VLMScenePlanner(lambda _: {"targets": [
             {"target_id": "object", "name": "bottle", "role": "manipulated_object"}
         ]})
         tracker = OnlineGroundingSAMTracker(TrackerBackend())
-        diagnoser = EventTriggeredVLMDiagnoser(lambda payload: calls.append(payload) or {
-            "failure_analysis": "test", "recovery_suggestions": ["retry"]
-        })
         pipeline = StreamingRoboSentinel(
-            planner, tracker, StreamingRuleEngine([EventRule()]), diagnoser
+            planner, tracker, StreamingRuleEngine([EventRule()])
         )
         frame = Frame("external", 0.0, 0, object())
         pipeline.initialize(Task("task", "move bottle"), SceneSnapshot(0.0, {"external": frame}))
         first = pipeline.update(StreamObservation(1.0, {"external": frame}))
         second = pipeline.update(StreamObservation(2.0, {"external": frame}))
-        self.assertIsNone(first.diagnosis)
-        self.assertIsNotNone(second.diagnosis)
-        self.assertEqual(len(calls), 1)
+        self.assertFalse(first.rules.failure_detected)
+        self.assertTrue(second.rules.failure_detected)
+        self.assertEqual(second.rules.findings[0].failure_type, "test_failure")
+        value = second.to_dict()
+        self.assertNotIn("diagnosis", value)
+        self.assertEqual(value["features"]["schema_version"], "2.0.0")
+        self.assertEqual(set(value["features"]["robot"]), {
+            "tcp_position_m", "tcp_frame", "gripper_position_normalized",
+        })
 
 
 if __name__ == "__main__":

@@ -10,11 +10,9 @@ from fastapi.testclient import TestClient
 
 from failure_detection.pipeline.contracts import PerceptionUpdate, TrackingPlan
 from failure_detection.pipeline.orchestrator import StreamingRoboSentinel
-from failure_detection.stages.diagnosis import EventTriggeredVLMDiagnoser
 from failure_detection.transport.codec import encode_jpeg
 from failure_detection.transport.live_client import LiveDetectionClient, ObservationPacket
 from failure_detection.transport.server import create_app
-from failure_detection.pipeline.contracts import RuleFinding, RuleReport
 
 
 class ManualFailureTests(unittest.TestCase):
@@ -22,8 +20,7 @@ class ManualFailureTests(unittest.TestCase):
         planner, tracker, rules = Mock(), Mock(), Mock()
         planner.plan.return_value = TrackingPlan("complete", (), "test")
         tracker.update.side_effect = lambda o: PerceptionUpdate(o.timestamp_sec, "complete", (), "test")
-        infer = Mock(return_value={"failure_analysis": "manual", "recovery_suggestions": []})
-        pipeline = StreamingRoboSentinel(planner, tracker, rules, EventTriggeredVLMDiagnoser(infer))
+        pipeline = StreamingRoboSentinel(planner, tracker, rules)
         jpeg = encode_jpeg(np.zeros((8, 8, 3), dtype=np.uint8))
         request = {"task_id": "test", "description": "move", "timestamp_sec": 0,
                    "frames": {"external": jpeg, "wrist": jpeg}}
@@ -35,28 +32,11 @@ class ManualFailureTests(unittest.TestCase):
                         ws.send_json({**request, "timestamp_sec": stamp, "manual_failure": True})
                         result = ws.receive_json()
                         self.assertTrue(result["manual_failure"])
-                        self.assertEqual(result["diagnosis"]["failure_analysis"], "manual")
+                        self.assertTrue(result["rules"]["failure_detected"])
+                        self.assertEqual(result["rules"]["findings"][0]["status"], "confirmed")
+                        self.assertNotIn("diagnosis", result)
                         self.assertEqual(result["rules"]["findings"][0]["evidence"]["source"], "operator")
         rules.update.assert_not_called()
-        self.assertEqual(infer.call_count, 2)
-        self.assertEqual(pipeline._diagnosed_events, set())
-
-    def test_recovery_rearms_automatic_diagnosis(self):
-        from failure_detection.pipeline.contracts import SceneSnapshot, StreamObservation, Task
-        planner, tracker, rules, diagnoser = Mock(), Mock(), Mock(), Mock()
-        planner.plan.return_value = TrackingPlan("complete", (), "test")
-        tracker.update.return_value = PerceptionUpdate(0, "complete", (), "test")
-        rules.update.return_value = RuleReport(0, "complete", (RuleFinding("fault", "confirmed"),), True)
-        pipeline = StreamingRoboSentinel(planner, tracker, rules, diagnoser)
-        pipeline.initialize(Task("test", "test"), SceneSnapshot(0, {}))
-        pipeline.update(StreamObservation(1, {}))
-        pipeline.update(StreamObservation(2, {}))
-        self.assertEqual(diagnoser.diagnose.call_count, 1)
-        reset = pipeline.update(StreamObservation(3, {}, reset_diagnosis=True))
-        self.assertIsNone(reset.diagnosis)
-        self.assertEqual(reset.rules.status, "reset")
-        pipeline.update(StreamObservation(4, {}))
-        self.assertEqual(diagnoser.diagnose.call_count, 2)
 
     def test_manual_snapshot_survives_latest_frames(self):
         client = LiveDetectionClient("http://localhost", "test")

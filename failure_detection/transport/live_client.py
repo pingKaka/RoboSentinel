@@ -1,4 +1,4 @@
-"""Latest-observation transport shared by teleoperation, replay and VLA producers."""
+"""Latest-observation transport shared by live and replay detection clients."""
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +26,19 @@ class ObservationPacket:
     robot_state: dict | None = None
     synchronization: dict | None = None
     manual_failure: bool = False
+
+
+def create_detection_client(settings):
+    return LiveDetectionClient(
+        settings["server"], settings["description"],
+        task_id=settings.get("task_id", "live"), fps=float(settings.get("fps", 10)),
+        output_dir=Path(settings.get("output_dir", "result/client")),
+        record_observations=settings.get("record_observations", True),
+        timeout=float(settings.get("timeout_sec", 600)),
+        jpeg_quality=int(settings.get("jpeg_quality", 85)),
+        ws_max_size=int(settings.get("ws_max_size", 2**24)),
+        ping_timeout=float(settings.get("ping_timeout_sec", 120)),
+    )
 
 
 class LiveDetectionClient:
@@ -64,10 +77,8 @@ class LiveDetectionClient:
         self.initial_result = None
         self.latest_robot_state = None
         self.fault_result = None
-        self._recover = Event()
         self.dropped = 0
         self.responses = 0
-        self.diagnosed_rules = set()
 
     def start(self):
         if self._thread is not None:
@@ -109,12 +120,6 @@ class LiveDetectionClient:
                 pass
         if wait and self._thread is not None:
             self._thread.join(timeout=12)
-
-    def recover(self):
-        if self.status != "streaming" or self._manual_busy:
-            return False
-        self._recover.set()
-        return True
 
     def _run(self):
         try:
@@ -182,9 +187,6 @@ class LiveDetectionClient:
                         while not self._stop.is_set():
                             source = await self._next()
                             packet = self._encode(source)
-                            if self._recover.is_set() and not source.manual_failure:
-                                packet["reset_diagnosis"] = True
-                                self._recover.clear()
                             started = time.monotonic()
                             await ws.send(json.dumps(packet, allow_nan=False))
                             result = json.loads(await asyncio.wait_for(ws.recv(), self.timeout))
@@ -203,18 +205,13 @@ class LiveDetectionClient:
                             logger.info("[Sentinel] t=%.2f visible=%d/%d failure=%s server=%sms dropped=%d",
                                         packet["timestamp_sec"], sum(t["visible"] for t in tracks), len(tracks),
                                         result.get("rules", {}).get("failure_detected"), result.get("server_processing_ms"), self.dropped)
-                            if result.get("diagnosis"):
-                                self.diagnosed_rules.update(finding["rule_id"] for finding in
-                                                            result.get("rules", {}).get("findings", [])
-                                                            if finding.get("status") == "confirmed")
-                                logger.warning("[Sentinel] DIAGNOSIS %s", json.dumps(result["diagnosis"], ensure_ascii=False))
                             self.latest_result = result
                             self.latest_visual = (result, source.frames)
                             self.latest_robot_state = source.robot_state
-                            if result.get("reset_diagnosis"):
-                                self.fault_result = None
-                            if result.get("rules", {}).get("failure_detected") and (self.fault_result is None or result.get("diagnosis")):
+                            if result.get("rules", {}).get("failure_detected"):
                                 self.fault_result = result
+                                logger.warning("[Sentinel] FAILURE %s", json.dumps(
+                                    result.get("rules", {}).get("findings", []), ensure_ascii=False))
                             if packet["manual_failure"]:
                                 self._manual_busy = False
                             await asyncio.sleep(max(0, self.interval - (time.monotonic() - started)))

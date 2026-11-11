@@ -11,15 +11,17 @@ from failure_detection.transport.dashboard import DetectionDashboard
 
 
 class DashboardTests(unittest.TestCase):
-    def test_render_fault_contours_and_long_chinese_analysis(self):
+    def test_render_fault_contours_and_long_rule_evidence(self):
         dashboard = DetectionDashboard()
         image = np.zeros((240, 424, 3), np.uint8)
         frames = {"external": image, "wrist": image}
         result = {"timestamp_sec": 1, "perception": {"tracks": [
             {"camera": "external", "target_id": "bottle", "visible": True,
              "box_xyxy": [20, 20, 100, 150], "contours": [[[20, 20], [100, 20], [100, 150]]]}]},
-            "diagnosis": {"failure_analysis": "目标不可见，需要检查是否存在遮挡。" * 80,
-                          "recovery_suggestions": ["检查当前场景。"]}}
+            "rules": {"failure_detected": True, "findings": [{
+                "rule_id": "target_lost", "status": "confirmed", "failure_type": "target_lost",
+                "confidence": 0.9, "evidence": {"detail": "目标不可见，存在持续遮挡。" * 80},
+            }]}}
         client = SimpleNamespace(status="streaming", error=None, _manual_busy=False,
                                  latest_visual=(result, frames), fault_result=result, latest_result=result,
                                  initial_result={"task_id": "bottle_test", "description": "抓取瓶子并放入试管架",
@@ -32,7 +34,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("bottle_test", "\n".join(dashboard.info_lines))
         self.assertIn("white bottle", "\n".join(dashboard.info_lines))
         self.assertIn("外部: 可见 / 腕部: 未知", dashboard.info_lines)
-        self.assertIn("机器人控制器: normal", dashboard.info_lines)
+        self.assertIn("TCP: 未知", dashboard.info_lines)
+        self.assertIn("规则: target_lost", "\n".join(dashboard._lines))
+        self.assertIn("故障类型: target_lost", "\n".join(dashboard._lines))
         self.assertGreater(dashboard.line_count, 7)
         self.assertGreater(np.unique(rendered.reshape(-1, 3), axis=0).shape[0], 100)
         dashboard.scroll = 9999

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..features.contracts import FeatureSnapshot
+    from ..rule_dsl.contracts import RulePackage
 
 
 @dataclass(frozen=True)
@@ -40,13 +44,30 @@ class TrackingPlan:
 
 
 @dataclass(frozen=True)
+class MonitoringPlan:
+    tracking: TrackingPlan
+    rule_package: RulePackage
+
+    @property
+    def status(self) -> str:
+        return self.tracking.status
+
+    @property
+    def targets(self) -> tuple[TrackingTarget, ...]:
+        return self.tracking.targets
+
+    @property
+    def planner(self) -> str | None:
+        return self.tracking.planner
+
+
+@dataclass(frozen=True)
 class StreamObservation:
     timestamp_sec: float
     frames: dict[str, Frame]
     robot_state: dict[str, Any] | None = None
     synchronization: dict[str, float] = field(default_factory=dict)
     manual_failure: bool = False
-    reset_diagnosis: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,6 +79,7 @@ class TrackState:
     mask: Any = None
     quality: float | None = None
     contours: list = field(default_factory=list)
+    observation_valid: bool = True
 
 
 @dataclass(frozen=True)
@@ -66,15 +88,6 @@ class PerceptionUpdate:
     status: str
     tracks: tuple[TrackState, ...]
     backend: str | None
-
-
-@dataclass(frozen=True)
-class RuleContext:
-    task: Task
-    plan: TrackingPlan
-    observation: StreamObservation
-    perception: PerceptionUpdate
-    history: tuple[PerceptionUpdate, ...]
 
 
 @dataclass(frozen=True)
@@ -95,20 +108,11 @@ class RuleReport:
 
 
 @dataclass(frozen=True)
-class Diagnosis:
-    timestamp_sec: float
-    status: str
-    failure_analysis: str | None
-    recovery_suggestions: tuple[str, ...]
-    backend: str | None
-
-
-@dataclass(frozen=True)
 class PipelineUpdate:
     timestamp_sec: float
     perception: PerceptionUpdate
+    features: FeatureSnapshot
     rules: RuleReport
-    diagnosis: Diagnosis | None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

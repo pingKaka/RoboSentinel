@@ -2,10 +2,9 @@
 from pathlib import Path
 
 from failure_detection.backends import load_qwen_once, create_online_tracker
-from failure_detection.rules import create_rules
 from failure_detection.pipeline import StreamingRoboSentinel
 from failure_detection.pipeline.rule_engine import StreamingRuleEngine
-from failure_detection.stages import VLMScenePlanner, OnlineGroundingSAMTracker, EventTriggeredVLMDiagnoser
+from failure_detection.stages import VLMScenePlanner, OnlineGroundingSAMTracker
 
 
 def model_settings(config):
@@ -17,7 +16,7 @@ def model_settings(config):
 
 def configured_qwen(paths, options):
     return load_qwen_once(paths["vlm"], options.get("quantize_vlm", True),
-                          options.get("vlm_max_new_tokens", 768), options.get("vlm_image_max_side", 768))
+                          options.get("vlm_max_new_tokens", 1536), options.get("vlm_image_max_side", 768))
 
 
 def preload_models(config):
@@ -38,9 +37,13 @@ def create_pipeline(config):
     paths, options = model_settings(config)
     qwen = configured_qwen(paths, options)
     tracker = create_online_tracker(paths["grounding_dino"], paths["sam"], options)
+    rules = config["stages"]["rules"]
     return StreamingRoboSentinel(
-        VLMScenePlanner(qwen.plan_tracking_targets), OnlineGroundingSAMTracker(tracker),
-        StreamingRuleEngine(create_rules(config["stages"]["rules"])),
-        EventTriggeredVLMDiagnoser(qwen.diagnose_failure),
+        VLMScenePlanner(
+            qwen.plan_monitoring, require_rules=True,
+            max_attempts=rules.get("max_generation_attempts", 2),
+            max_rules=rules.get("max_rules", 6),
+        ),
+        OnlineGroundingSAMTracker(tracker), StreamingRuleEngine(),
         buffer_seconds=config["runtime"]["buffer_seconds"],
     )

@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from ..features.contracts import FeatureContext
 from .contracts import (
-    Diagnosis, PerceptionUpdate, RuleContext, RuleFinding, RuleReport,
-    SceneSnapshot, StreamObservation, Task, TrackingPlan,
+    PerceptionUpdate, RuleFinding, RuleReport,
+    MonitoringPlan, SceneSnapshot, StreamObservation, Task, TrackingPlan,
 )
 
 
 class ScenePlanner(Protocol):
     name: str
-    def plan(self, task: Task, scene: SceneSnapshot) -> TrackingPlan: ...
+    def plan(self, task: Task, scene: SceneSnapshot) -> MonitoringPlan: ...
 
 
 class OnlineObjectTracker(Protocol):
@@ -21,13 +22,9 @@ class OnlineObjectTracker(Protocol):
 
 class StreamingFailureRule(Protocol):
     rule_id: str
-    def update(self, context: RuleContext) -> RuleFinding: ...
+    def update(self, context: FeatureContext) -> RuleFinding: ...
 
 
 class RuleEngine(Protocol):
-    def update(self, context: RuleContext) -> RuleReport: ...
-
-
-class FailureDiagnoser(Protocol):
-    name: str
-    def diagnose(self, context: RuleContext, report: RuleReport) -> Diagnosis: ...
+    def initialize(self, task: Task, plan: TrackingPlan, rule_package) -> None: ...
+    def update(self, context: FeatureContext) -> RuleReport: ...

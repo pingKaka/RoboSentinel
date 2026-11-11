@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robosentinel.local/schema/failure-rule/1.0.0",
+  "title": "RoboSentinel Failure Rule Package",
+  "type": "object",
+  "required": ["schema_version", "task_type", "rules"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "task_type": {"enum": ["pick", "transport", "place", "pick_and_place", "other"]},
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {"$ref": "#/$defs/rule"}
+    }
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+    "binding": {
+      "type": "object",
+      "required": ["alias", "feature", "reason"],
+      "properties": {
+        "alias": {"$ref": "#/$defs/identifier"},
+        "feature": {
+          "enum": [
+            "entity.visible_any", "entity.missing_all_cameras", "entity.visible_camera_count",
+            "entity.camera.visibility", "entity.camera.mask_centroid_x", "entity.camera.mask_centroid_y",
+            "entity.camera.mask_area_ratio", "entity.camera.mask_perimeter_normalized",
+            "entity.camera.mask_component_count", "entity.camera.mask_compactness",
+            "entity.camera.tracking_quality", "relation.delta_x", "relation.delta_y",
+            "relation.centroid_distance", "relation.mask_iou", "relation.mask_intersection_ratio",
+            "relation.mask_coverage_a", "relation.mask_coverage_b", "robot.tcp_x", "robot.tcp_y",
+            "robot.tcp_z", "robot.gripper_position_normalized"
+          ]
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "entity": {"$ref": "#/$defs/identifier"},
+        "entities": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"$ref": "#/$defs/identifier"}
+        },
+        "camera": {"type": "string", "minLength": 1}
+      }
+    },
+    "expression": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["op", "feature", "value"],
+          "properties": {
+            "op": {"enum": ["eq", "gt", "lt"]},
+            "feature": {"$ref": "#/$defs/identifier"},
+            "value": {}
+          }
+        },
+        {
+          "type": "object", "required": ["op", "feature", "min", "max"],
+          "properties": {
+            "op": {"const": "between"}, "feature": {"$ref": "#/$defs/identifier"},
+            "min": {"type": "number"}, "max": {"type": "number"}
+          }
+        },
+        {
+          "type": "object", "required": ["op", "feature", "delta", "window_sec"],
+          "properties": {
+            "op": {"const": "changed"}, "feature": {"$ref": "#/$defs/identifier"},
+            "delta": {"type": "number", "minimum": 0},
+            "direction": {"enum": ["any", "increase", "decrease"]},
+            "window_sec": {"type": "number", "minimum": 0}
+          }
+        },
+        {
+          "type": "object", "required": ["op", "feature", "tolerance", "window_sec"],
+          "properties": {
+            "op": {"const": "stable"}, "feature": {"$ref": "#/$defs/identifier"},
+            "tolerance": {"type": "number", "minimum": 0},
+            "window_sec": {"type": "number", "minimum": 0}
+          }
+        },
+        {
+          "type": "object", "required": ["op", "args"],
+          "properties": {
+            "op": {"enum": ["all", "any"]},
+            "args": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/expression"}}
+          }
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "required": [
+        "rule_id", "failure_type", "constraint_type", "description", "feature_bindings",
+        "activation", "condition", "duration_sec", "minimum_samples", "unknown_policy",
+        "explanation_template"
+      ],
+      "properties": {
+        "rule_id": {"$ref": "#/$defs/identifier"},
+        "failure_type": {"$ref": "#/$defs/identifier"},
+        "constraint_type": {"enum": ["during_execution", "upon_completion"]},
+        "description": {"type": "string", "minLength": 1},
+        "feature_bindings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/binding"}},
+        "activation": {"$ref": "#/$defs/expression"},
+        "condition": {"$ref": "#/$defs/expression"},
+        "duration_sec": {"type": "number", "minimum": 0},
+        "minimum_samples": {"type": "integer", "minimum": 1, "maximum": 300},
+        "unknown_policy": {"const": "unknown"},
+        "explanation_template": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

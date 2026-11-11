@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from ..features import FeatureContext, StandardFeatureExtractor
 from ..runtime.buffer import TimeSeriesBuffer
-from .contracts import PipelineUpdate, RuleContext, RuleFinding, RuleReport, SceneSnapshot, StreamObservation, Task
-from .interfaces import FailureDiagnoser, OnlineObjectTracker, RuleEngine, ScenePlanner
+from .contracts import (
+    MonitoringPlan, PipelineUpdate, RuleFinding, RuleReport, SceneSnapshot,
+    StreamObservation, Task, TrackingPlan,
+)
+from .interfaces import OnlineObjectTracker, RuleEngine, ScenePlanner
 
 
 class StreamingRoboSentinel:
@@ -13,52 +17,49 @@ class StreamingRoboSentinel:
         planner: ScenePlanner,
         tracker: OnlineObjectTracker,
         rules: RuleEngine,
-        diagnoser: FailureDiagnoser,
+        feature_extractor: StandardFeatureExtractor | None = None,
         buffer_seconds: float = 15.0,
     ) -> None:
         self.planner = planner
         self.tracker = tracker
         self.rules = rules
-        self.diagnoser = diagnoser
+        self.feature_extractor = feature_extractor or StandardFeatureExtractor()
         self.history = TimeSeriesBuffer(buffer_seconds, lambda item: item.timestamp_sec)
         self.task = None
         self.plan = None
-        self._diagnosed_events = set()
 
     def initialize(self, task: Task, scene: SceneSnapshot) -> None:
-        plan = self.planner.plan(task, scene)
+        result = self.planner.plan(task, scene)
+        if isinstance(result, MonitoringPlan):
+            plan, rule_package = result.tracking, result.rule_package
+        elif isinstance(result, TrackingPlan):
+            plan, rule_package = result, None
+        else:
+            raise TypeError("Planner must return MonitoringPlan")
         if plan.status != "complete":
-            raise RuntimeError("VLM did not produce a valid tracking plan")
+            raise RuntimeError("VLM did not produce a valid monitoring plan")
         self.tracker.initialize(plan, scene)
+        initialize_rules = getattr(self.rules, "initialize", None)
+        if callable(initialize_rules):
+            initialize_rules(task, plan, rule_package)
         self.task, self.plan = task, plan
-        self._diagnosed_events.clear()
+        self.rule_package = rule_package
+        self.history.clear()
+        self.feature_extractor.reset()
 
     def update(self, observation: StreamObservation) -> PipelineUpdate:
         if self.task is None or self.plan is None:
             raise RuntimeError("Pipeline must be initialized before streaming")
         perception = self.tracker.update(observation)
-        self.history.append(perception)
-        context = RuleContext(
-            self.task, self.plan, observation, perception, self.history.items()
-        )
-        if observation.reset_diagnosis:
-            self._diagnosed_events.clear()
-            return PipelineUpdate(observation.timestamp_sec, perception,
-                                  RuleReport(observation.timestamp_sec, "reset", (), None), None)
+        features = self.feature_extractor.extract(self.plan, observation, perception)
+        self.history.append(features)
+        context = FeatureContext(features, self.history.items())
         if observation.manual_failure:
             report = RuleReport(observation.timestamp_sec, "complete", (
                 RuleFinding("manual_failure", "confirmed", "operator_reported_failure", evidence={
                     "source": "operator", "timestamp_sec": observation.timestamp_sec,
-                    "note": "Human requested diagnosis; failure was not verified by automatic rules.",
+                    "note": "Failure reported directly by the operator.",
                 }),), True)
-            return PipelineUpdate(observation.timestamp_sec, perception, report,
-                                  self.diagnoser.diagnose(context, report))
+            return PipelineUpdate(observation.timestamp_sec, perception, features, report)
         report = self.rules.update(context)
-        confirmed = {item.rule_id for item in report.findings if item.status == "confirmed"}
-        cleared = {item.rule_id for item in report.findings if item.status == "clear"}
-        self._diagnosed_events.difference_update(cleared)
-        diagnosis = None
-        if report.failure_detected and confirmed - self._diagnosed_events:
-            diagnosis = self.diagnoser.diagnose(context, report)
-            self._diagnosed_events.update(confirmed)
-        return PipelineUpdate(observation.timestamp_sec, perception, report, diagnosis)
+        return PipelineUpdate(observation.timestamp_sec, perception, features, report)

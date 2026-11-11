@@ -1,8 +1,8 @@
 # UR5e Video Teleop
 
-本项目已集成到 RoboSentinel。双相机和状态上传、服务器常驻模型、无机器人视频回放及实时测试见 [实时检测测试流程](../docs/realtime_test_zh.md)。
+本项目已集成到 RoboSentinel。双相机和状态上传、服务器常驻模型、无机器人视频回放及实时测试入口见 [项目总览](../README.md)。
 
-在 RoboSentinel 根目录安装 `requirements-client.txt` 并执行 `pip install --no-deps -e ./ur5e_video_teleop` 后，可用 `--sentinel-server http://SERVER_IP:8000` 启用后台检测。不开启该参数且配置 `sentinel.enabled: False` 时保留原有视频遥操作行为。检测只接收观测，不执行恢复建议。
+在 RoboSentinel 根目录安装 `requirements-client.txt` 并执行 `pip install --no-deps -e ./ur5e_video_teleop` 后，可用 `--sentinel-server http://SERVER_IP:8000` 启用后台检测。不开启该参数且配置 `sentinel.enabled: False` 时保留原有视频遥操作行为。检测只接收观测并输出规则报告，不控制机器人。
 
 `ur5e_video_teleop` 是一个轻量版 UR5e/UR7e 同构遥操作项目。它复用原项目
 `lerobot_robot_ur5e` 和 `lerobot_teleoperator_ur5e` 的机器人控制、Dynamixel
@@ -292,7 +292,7 @@ ls /dev/ur5e_left_gripper
 tools-check-rs
 ```
 
-6. 确认 `config/video_teleop.yaml` 中的标定参数和原项目一致：
+6. 确认根目录 `config/teleop.yaml` 中的标定参数和原项目一致：
 
 - `hardware_offsets`
 - `joint_offsets`

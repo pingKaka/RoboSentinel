@@ -1,4 +1,5 @@
 """Local OpenCV dashboard; images and overlays always share a timestamp."""
+import json
 from pathlib import Path
 
 import cv2
@@ -34,7 +35,7 @@ class DetectionDashboard:
                 return
             self.scroll = max(0, min(max(0, self.line_count - 7), self.scroll + (-3 if flags > 0 else 3)))
 
-    def render(self, frames, client=None, active=False, now=0, notice="", keys=("space", "f", "r", "esc"), task=None):
+    def render(self, frames, client=None, active=False, now=0, notice="", keys=("space", "f", "esc"), task=None):
         canvas = Image.new("RGB", (1600, 940), "#f2f4f7")
         draw = ImageDraw.Draw(canvas)
         fault = client.fault_result if client else None
@@ -45,7 +46,7 @@ class DetectionDashboard:
             if client and client.status == "streaming":
                 status, color = "检测中", "#168052"
             if client and client._manual_busy:
-                status, color = "发生故障 · 人工报告，分析中", "#b63636"
+                status, color = "发生故障 · 人工报告提交中", "#b63636"
             if fault:
                 status, color = "发生故障", "#b63636"
             if client and client.error:
@@ -81,13 +82,27 @@ class DetectionDashboard:
         detail = "" if stamp is None else f"处理帧 {stamp:.2f}s  |  距当前 {max(0, now - stamp):.1f}s"
         draw.text((20, 608), detail, font=self.font, fill="#52616b")
         draw.line((20, 642, 1180, 642), fill="#c3cbd2")
-        if fault is not self.last_fault:
+        if fault != self.last_fault:
             self.scroll = 0
             self.last_fault = fault
-        diagnosis = (fault or {}).get("diagnosis") or {}
-        body = diagnosis.get("failure_analysis") or ("故障已报告，等待分析结果。" if fault or (client and client._manual_busy) else "暂无故障分析。")
-        for index, suggestion in enumerate(diagnosis.get("recovery_suggestions", []), 1):
-            body += f"\n{index}. {suggestion}"
+        findings = (fault or {}).get("rules", {}).get("findings", [])
+        source = "人工报告" if (fault or {}).get("manual_failure") else "自动规则"
+        body = "暂无故障检测结果。"
+        if findings:
+            sections = []
+            for finding in findings:
+                confidence = finding.get("confidence")
+                lines = [f'规则: {finding.get("rule_id", "--")}',
+                         f'故障类型: {finding.get("failure_type") or "未分类"}',
+                         f'状态: {finding.get("status", "--")}',
+                         f'来源: {source}']
+                if confidence is not None:
+                    lines.append(f'置信度: {confidence}')
+                lines.append("证据: " + json.dumps(finding.get("evidence", {}), ensure_ascii=False, sort_keys=True))
+                sections.append("\n".join(lines))
+            body = "\n\n".join(sections)
+        elif client and client._manual_busy:
+            body = "人工故障报告提交中。"
         if client and client.error:
             body = "连接错误：" + client.error + "\n" + body
         if body != self._body:
@@ -95,12 +110,12 @@ class DetectionDashboard:
         lines = self._lines
         self.line_count = len(lines)
         self.scroll = min(self.scroll, max(0, len(lines) - 7))
-        draw.text((20, 650), f"故障分析 / 恢复建议   {self.scroll + 1}-{min(len(lines), self.scroll + 7)}/{len(lines)}", font=self.font, fill="#202b33")
+        draw.text((20, 650), f"故障检测结果   {self.scroll + 1}-{min(len(lines), self.scroll + 7)}/{len(lines)}", font=self.font, fill="#202b33")
         for index, line in enumerate(lines[self.scroll:self.scroll + 7]):
             draw.text((20, 682 + index * 27), line, font=self.font, fill="#202b33")
         draw.text((20, 875), notice, font=self.font, fill="#976500")
-        start, failure, recovery, quit_key = keys
-        draw.text((20, 910), f"{start}: 开始/停止  |  {failure}: 报告故障  |  {recovery}: 恢复检测  |  {quit_key}: 退出", font=self.font, fill="#52616b")
+        start, failure, quit_key = keys
+        draw.text((20, 910), f"{start}: 开始/停止  |  {failure}: 报告故障  |  {quit_key}: 退出", font=self.font, fill="#52616b")
         self._information(draw, client, task or {}, active, fault)
         return cv2.cvtColor(np.asarray(canvas), cv2.COLOR_RGB2BGR)
 
@@ -133,8 +148,11 @@ class DetectionDashboard:
         findings = (result.get("rules") or {}).get("findings", [])
         states = {"clear": "正常", "unknown": "未知", "confirmed": "确认异常"}
         lines.extend([f'{f["rule_id"]}: {states.get(f["status"], f["status"])}' for f in findings] or ["尚无规则结果"])
-        robot = getattr(client, "latest_robot_state", None) or {}
-        lines.extend(["", "机器人控制器: " + str(robot.get("controller_state", "未知"))])
+        robot = (result.get("features") or {}).get("robot", {})
+        lines.extend(["", "机器人特征",
+                      "TCP: " + str(robot.get("tcp_position_m") or "未知"),
+                      "夹爪位置: " + str(robot.get("gripper_position_normalized")
+                                       if robot.get("gripper_position_normalized") is not None else "未知")])
         if fault:
             lines.extend(["", "最近故障", "来源: " + ("人工报告" if fault.get("manual_failure") else "自动规则"),
                           f'观测时间: {fault.get("timestamp_sec", "--")} s'])
