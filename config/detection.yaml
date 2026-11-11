@@ -22,6 +22,9 @@ streams:
 stages:
   planner:
     backend: "qwen3_vl"
+    prompt: "prompt/monitoring_plan.txt"
+    correction_prompt: "prompt/monitoring_plan_correction.txt"
+    request_envelope: "prompt/request_envelope.txt"
   tracker:
     backend: "grounding_dino_sam_online"
   features:
@@ -29,6 +32,8 @@ stages:
   rules:
     mode: "generated"
     schema_version: "1.0.0"
+    # Set for manual or merged mode. Copy the example before editing.
+    manual_plan: null
     max_generation_attempts: 2
     max_rules: 6
 runtime:

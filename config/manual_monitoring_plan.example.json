@@ -1,0 +1,59 @@
+{
+  "targets": [
+    {
+      "target_id": "object_1",
+      "name": "white capped reagent bottle",
+      "role": "manipulated_object"
+    },
+    {
+      "target_id": "destination",
+      "name": "black cup",
+      "role": "destination"
+    }
+  ],
+  "rule_package": {
+    "schema_version": "1.0.0",
+    "task_type": "pick_and_place",
+    "rules": [
+      {
+        "rule_id": "object_destination_overlap_too_high",
+        "failure_type": "excessive_object_overlap",
+        "constraint_type": "during_execution",
+        "description": "物体与目标区域的掩码IoU不应持续超过50%。",
+        "feature_bindings": [
+          {
+            "alias": "overlap",
+            "feature": "relation.mask_iou",
+            "entities": ["object_1", "destination"],
+            "camera": "external",
+            "reason": "掩码IoU用于衡量两个实体在外部相机中的整体重叠程度。"
+          },
+          {
+            "alias": "object_visible",
+            "feature": "entity.visible_any",
+            "entity": "object_1",
+            "reason": "物体可见时重叠关系才可解释。"
+          },
+          {
+            "alias": "destination_visible",
+            "feature": "entity.visible_any",
+            "entity": "destination",
+            "reason": "目标区域可见时重叠关系才可解释。"
+          }
+        ],
+        "activation": {
+          "op": "all",
+          "args": [
+            {"op": "eq", "feature": "object_visible", "value": true},
+            {"op": "eq", "feature": "destination_visible", "value": true}
+          ]
+        },
+        "condition": {"op": "gt", "feature": "overlap", "value": 0.5},
+        "duration_sec": 0.5,
+        "minimum_samples": 3,
+        "unknown_policy": "unknown",
+        "explanation_template": "物体与目标区域的掩码IoU持续超过50%。"
+      }
+    ]
+  }
+}

@@ -78,6 +78,9 @@ def _validate_expression(value: Any, aliases: set[str], label: str) -> dict[str,
     if op not in OPERATORS:
         raise RuleSchemaError(f"{label}.op must be one of {sorted(OPERATORS)}")
     if op in BOOLEAN_OPERATORS:
+        unknown = set(expression) - {"op", "args"}
+        if unknown:
+            raise RuleSchemaError(f"{label} has unsupported fields {sorted(unknown)}")
         args = expression.get("args")
         if not isinstance(args, list) or not args:
             raise RuleSchemaError(f"{label}.args must be a nonempty list")
@@ -88,6 +91,18 @@ def _validate_expression(value: Any, aliases: set[str], label: str) -> dict[str,
     alias = expression.get("feature")
     if alias not in aliases:
         raise RuleSchemaError(f"{label}.feature references unknown binding {alias!r}")
+    allowed = {"op", "feature"}
+    if op in {"eq", "gt", "lt"}:
+        allowed.add("value")
+    elif op == "between":
+        allowed.update({"min", "max"})
+    elif op == "changed":
+        allowed.update({"delta", "direction", "window_sec"})
+    elif op == "stable":
+        allowed.update({"tolerance", "window_sec"})
+    unknown = set(expression) - allowed
+    if unknown:
+        raise RuleSchemaError(f"{label} has unsupported fields {sorted(unknown)}")
     if op in {"eq", "gt", "lt"} and "value" not in expression:
         raise RuleSchemaError(f"{label}.value is required")
     if op in {"gt", "lt"}:
@@ -105,6 +120,31 @@ def _validate_expression(value: Any, aliases: set[str], label: str) -> dict[str,
         if op == "changed" and direction not in {"any", "increase", "decrease"}:
             raise RuleSchemaError(f"{label}.direction is invalid")
     return dict(expression)
+
+
+def _canonicalize_expression_features(value: Any, feature_aliases: dict[str, list[str]]) -> Any:
+    """Repair only an unambiguous catalog-name-for-alias transcription error."""
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    if result.get("op") in BOOLEAN_OPERATORS:
+        args = result.get("args")
+        if isinstance(args, list):
+            result["args"] = [
+                _canonicalize_expression_features(item, feature_aliases) for item in args
+            ]
+        return result
+    feature = result.get("feature")
+    candidates = feature_aliases.get(feature, [])
+    if len(candidates) == 1:
+        result["feature"] = candidates[0]
+    return result
+
+
+def _expression_aliases(value: dict[str, Any]) -> set[str]:
+    if value.get("op") in BOOLEAN_OPERATORS:
+        return set().union(*(_expression_aliases(item) for item in value["args"]))
+    return {value["feature"]}
 
 
 def parse_rule_package(value: Any, target_ids: set[str], max_rules: int = 6) -> RulePackage:
@@ -139,6 +179,7 @@ def parse_rule_package(value: Any, target_ids: set[str], max_rules: int = 6) -> 
             raise RuleSchemaError(f"{label}.feature_bindings must be nonempty")
         bindings = []
         aliases: set[str] = set()
+        feature_aliases: dict[str, list[str]] = {}
         for binding_index, raw_binding in enumerate(raw_bindings):
             binding_label = f"{label}.feature_bindings[{binding_index}]"
             binding = _mapping(raw_binding, binding_label)
@@ -149,6 +190,7 @@ def parse_rule_package(value: Any, target_ids: set[str], max_rules: int = 6) -> 
             if feature not in SCALAR_FEATURES:
                 raise RuleSchemaError(f"{binding_label}.feature is not in the feature catalog")
             aliases.add(alias)
+            feature_aliases.setdefault(feature, []).append(alias)
             entity = binding.get("entity")
             entities = binding.get("entities")
             camera = binding.get("camera")
@@ -170,8 +212,13 @@ def parse_rule_package(value: Any, target_ids: set[str], max_rules: int = 6) -> 
                 camera if isinstance(camera, str) else None,
             ))
 
-        activation = _validate_expression(item.get("activation"), aliases, f"{label}.activation")
-        condition = _validate_expression(item.get("condition"), aliases, f"{label}.condition")
+        activation_value = _canonicalize_expression_features(item.get("activation"), feature_aliases)
+        condition_value = _canonicalize_expression_features(item.get("condition"), feature_aliases)
+        activation = _validate_expression(activation_value, aliases, f"{label}.activation")
+        condition = _validate_expression(condition_value, aliases, f"{label}.condition")
+        unused_aliases = aliases - _expression_aliases(activation) - _expression_aliases(condition)
+        if unused_aliases:
+            raise RuleSchemaError(f"{label}.feature_bindings has unused aliases {sorted(unused_aliases)}")
         duration = _number(item.get("duration_sec"), f"{label}.duration_sec", 0.0)
         minimum_samples = item.get("minimum_samples")
         if (isinstance(minimum_samples, bool) or not isinstance(minimum_samples, int)

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2
 from project_config import load_project_config, resolve_path
 from failure_detection.backends import create_online_tracker
+from failure_detection.prompts import load_prompt
 from failure_detection.pipeline.contracts import Frame, SceneSnapshot, StreamObservation, TrackingPlan, TrackingTarget, Task
 from my_backend import create_pipeline, configured_qwen
 
@@ -38,7 +39,13 @@ def main():
     scene = SceneSnapshot(0, frames)
     if args.mode == "qwen":
         qwen = configured_qwen(paths, config.get("backend", {}))
-        print(qwen.plan_monitoring({"task": args.description, "frames": {k: image for k in frames}}))
+        planner = config["stages"]["planner"]
+        print(qwen.plan_monitoring(
+            {"task": args.description, "frames": {k: image for k in frames}},
+            load_prompt(root, planner["prompt"]),
+            load_prompt(root, planner["correction_prompt"]),
+            load_prompt(root, planner["request_envelope"]),
+        ))
         return
     if args.mode == "tracker":
         pipeline = create_online_tracker(paths["grounding_dino"], paths["sam"], config.get("backend", {}))

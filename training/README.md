@@ -100,7 +100,7 @@ Before trusting a checkpoint, compare it with the unfine-tuned model on the
 unchanged `test.jsonl`. Do not select checkpoints using test-set results.
 
 The SFT target schema uses `outcome`, `failure_type`, `evidence_frames`, and
-`reason`. Adapter inference must use the same `sft_prompt_zh.txt` protocol and
+`reason`. Adapter inference must use the same `prompt/training_sft_zh.txt` protocol and
 the same fixed-interval image ordering. Keep inference result handling in passthrough mode,
 or update downstream consumers to understand this schema; switching back to a
 different prompt or output schema discards part of the fine-tuning benefit.

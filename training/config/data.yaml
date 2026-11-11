@@ -2,7 +2,7 @@ project_root: "../.."
 annotations: "training/data/annotations/episodes.jsonl"
 processed_dir: "training/data/processed"
 sft_dir: "training/data/sft"
-prompt_file: "training/config/sft_prompt_zh.txt"
+prompt_file: "prompt/training_sft_zh.txt"
 
 frame_sample_interval_seconds: 0.5
 source_image_size: 384

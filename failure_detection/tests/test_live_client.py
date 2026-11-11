@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from failure_detection.transport.live_client import LiveDetectionClient, ObservationPacket
 from failure_detection.transport.teleop_adapter import teleop_packet
+from failure_detection.robot_state import UR5eRTDEStateProvider
 from failure_detection.transport.server import create_app
 from failure_detection.backends import load_qwen_once, _qwen
 
@@ -53,16 +54,17 @@ class LiveClientTests(unittest.TestCase):
         receiver = Mock()
         receiver.getActualTCPPose.return_value = [1, 2, 3, 4, 5, 6]
         receiver.getSafetyMode.return_value = 3
-        robot = SimpleNamespace(config=SimpleNamespace(control_space="tcp_force"), _arm={"rtde_r": receiver})
+        provider = UR5eRTDEStateProvider(receiver)
         image = np.zeros((8, 8, 3), dtype=np.uint8)
         obs = {"wrist_image": image, "exterior_image": image, "gripper_raw_position": 0.5,
                **{f"tcp_pose.{axis}": 0.1 for axis in ("x", "y", "z", "rx", "ry", "rz")}}
         with patch("failure_detection.transport.teleop_adapter.time.monotonic", return_value=12.1):
-            packet = teleop_packet(obs, robot, 10, 11.9, 12)
+            packet = teleop_packet(obs, provider, 10, 11.9, 12)
         self.assertEqual(packet.timestamp_sec, 2)
         self.assertEqual(packet.robot_state["tcp_position"], [1, 2, 3])
         self.assertEqual(packet.robot_state["tcp_position_frame"], "base")
         self.assertEqual(packet.robot_state["gripper_position_normalized"], 0.5)
+        self.assertTrue(packet.robot_state["valid"])
         self.assertNotIn("controller_state", packet.robot_state)
         self.assertNotIn("tcp_speed", packet.robot_state)
 

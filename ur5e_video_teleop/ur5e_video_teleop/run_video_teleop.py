@@ -372,6 +372,7 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
     notice = ""
     dashboard = None
     sentinel_adapter = None
+    robot_state_provider = None
     sentinel_origin = time.monotonic()
     last_sentinel_submit = -float("inf")
     key_state = ToggleKeyState(cfg.record_key, cfg.exit_key, failure_key)
@@ -385,6 +386,7 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
             sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
             from failure_detection.transport.live_client import create_detection_client
             from failure_detection.transport.teleop_adapter import teleop_packet
+            from failure_detection.robot_state import create_robot_state_provider
             sentinel_adapter = teleop_packet
         if cfg.preview:
             sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -398,6 +400,10 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
         robot, teleop = make_robot_and_teleop(cfg)
         robot.connect()
         teleop.connect()
+        if cfg.sentinel.get("enabled", False):
+            robot_state_provider = create_robot_state_provider(
+                cfg.sentinel.get("robot_state", {}), robot
+            )
         robot.set_episode_reference_pose()
         key_state.start()
         logger.info("[Sentinel] Press '%s' to report a failure after STREAMING; this does not stop the robot.", failure_key)
@@ -441,7 +447,7 @@ def run_video_teleop(cfg: VideoTeleopConfig) -> None:
             if sentinel is not None and (manual_failure or capture_finished - last_sentinel_submit >= sentinel.interval):
                 last_sentinel_submit = capture_finished
                 try:
-                    packet = sentinel_adapter(observation, robot, sentinel_origin,
+                    packet = sentinel_adapter(observation, robot_state_provider, sentinel_origin,
                                               capture_started, capture_finished, action)
                     accepted = sentinel.submit(replace(packet, manual_failure=manual_failure))
                     if manual_failure:

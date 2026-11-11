@@ -12,7 +12,8 @@ from failure_detection.rule_dsl import RULE_SCHEMA_VERSION
 
 
 CONFIG_VERSION = 4
-DEFAULT_CONFIG = Path(__file__).resolve().parent / "cfg.yaml"
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_CONFIG = PROJECT_ROOT / "cfg.yaml"
 
 
 def _read_config(path: Path, stack=()) -> dict:
@@ -52,8 +53,10 @@ def load_project_config(path: Path) -> tuple[dict[str, Any], Path]:
     if config["version"] != CONFIG_VERSION:
         raise ValueError(f"Unsupported config version: {config['version']!r}")
     rule_config = config["stages"]["rules"]
-    if rule_config.get("mode") != "generated":
-        raise ValueError("stages.rules.mode must be 'generated'")
+    if rule_config.get("mode") not in {"generated", "manual", "merged"}:
+        raise ValueError("stages.rules.mode must be generated, manual, or merged")
+    if rule_config.get("mode") in {"manual", "merged"} and not rule_config.get("manual_plan"):
+        raise ValueError("manual and merged rule modes require stages.rules.manual_plan")
     if rule_config.get("schema_version") != RULE_SCHEMA_VERSION:
         raise ValueError(f"Unsupported rule schema version: {rule_config.get('schema_version')!r}")
     configured_features = config["stages"].get("features", {}).get("schema_version")
@@ -61,6 +64,20 @@ def load_project_config(path: Path) -> tuple[dict[str, Any], Path]:
         raise ValueError(
             f"Unsupported feature schema version: {configured_features!r}; expected {FEATURE_SCHEMA_VERSION}"
         )
+    planner = config["stages"].get("planner", {})
+    for key in ("prompt", "correction_prompt", "request_envelope"):
+        if not isinstance(planner.get(key), str) or not planner[key].strip():
+            raise ValueError(f"stages.planner.{key} is required")
+        candidate = Path(planner[key]).expanduser()
+        candidate = candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+        if not candidate.is_file():
+            raise ValueError(f"Prompt file does not exist: {candidate}")
+        planner[key] = str(candidate.resolve())
+    if rule_config.get("manual_plan"):
+        candidate = Path(rule_config["manual_plan"]).expanduser()
+        candidate = candidate if candidate.is_absolute() else path.parent / candidate
+        if not candidate.is_file():
+            raise ValueError(f"Manual monitoring plan does not exist: {candidate}")
     config["_config_root"] = str(path.parent)
     return config, path.parent
 

@@ -1,0 +1,73 @@
+You write one executable failure monitor for a robot manipulation task.
+
+Study the task and both initial camera images. Privately reason about:
+1. What object is manipulated and what destination is relevant?
+2. What observable event starts the phase you monitor?
+3. What different observable fact proves failure?
+4. Can both facts be measured by the API below, with the stated units?
+Do not output your reasoning. Return one JSON object only.
+
+The runtime tracks segmentation masks and robot state over time. Each evidence object directly selects one measurement and one operator:
+- entity.visible_any: boolean, entity visible in at least one camera.
+- entity.missing_all_cameras: boolean, entity absent in every camera.
+- entity.camera.mask_centroid_x/y: mask center in [0,1]; requires entity and camera.
+- entity.camera.mask_area_ratio: mask area / image area; requires entity and camera.
+- entity.camera.tracking_quality: confidence in [0,1]; requires entity and camera.
+- relation.centroid_distance: normalized mask-center distance; requires "entities":["first_id","second_id"] and camera.
+- relation.mask_iou: mask intersection / union; requires "entities":["first_id","second_id"] and camera.
+- relation.mask_coverage_a: intersection / first entity mask area; requires "entities":["first_id","second_id"] and camera. Prefer this to test whether the first entity is inside the second.
+- relation.mask_coverage_b: intersection / second entity mask area; requires "entities":["first_id","second_id"] and camera.
+- robot.tcp_x: TCP x position in meters.
+- robot.tcp_y: TCP y position in meters.
+- robot.tcp_z: TCP z position in meters.
+- robot.gripper_position_normalized: number in [0,1]. Opening direction is unknown, so use changed or stable only.
+
+Operators and required parameters:
+- eq: value
+- gt or lt: value
+- between: min, max
+- changed: delta, direction (any/increase/decrease), window_sec
+- stable: tolerance, window_sec
+- all or any: args containing evidence objects
+Do not add parameters not listed for the selected operator.
+
+activation starts checking. condition is failure evidence while active. duration_sec is how long condition persists. minimum_samples is the number of violating frames. Every evidence object needs a reason explaining its measurement and threshold.
+
+Activation and condition must be different facts. The target normally starts outside its destination, so low overlap cannot activate a placement-failure rule. Activate placement checking with a preceding event such as gripper motion, object motion, or TCP motion, then test low overlap as the condition.
+
+Wrong because it fires in the normal initial state:
+activation = bottle coverage in cup < 0.5; condition = bottle coverage in cup < 0.5.
+Right:
+activation = gripper position changed; condition = bottle coverage in cup < 0.5.
+
+Example for task "pick the bottle":
+{
+  "targets":[{"target_id":"bottle","name":"white bottle","role":"manipulated_object"}],
+  "task_type":"pick",
+  "rules":[{
+    "rule_id":"grasp_failed",
+    "failure_type":"grasp_failed",
+    "constraint_type":"during_execution",
+    "description":"After a gripper action, the bottle should start moving.",
+    "activation":{"feature":"robot.gripper_position_normalized","op":"changed","delta":0.15,"direction":"any","window_sec":1.0,"reason":"A direction-independent change of 0.15 marks a gripper action."},
+    "condition":{"feature":"entity.camera.mask_centroid_x","entity":"bottle","camera":"external","op":"stable","tolerance":0.02,"window_sec":1.0,"reason":"Centroid variation below 0.02 for one second means the bottle did not move horizontally."},
+    "duration_sec":0.5,
+    "minimum_samples":3,
+    "unknown_policy":"unknown",
+    "explanation_template":"The gripper acted, but the bottle mask remained stationary."
+  }]
+}
+
+Relation evidence example for "bottle must overlap the cup":
+{"feature":"relation.mask_coverage_a","entities":["bottle","cup"],"camera":"external","op":"lt","value":0.5,"reason":"Less than half of the bottle mask covered by the cup mask indicates placement failure."}
+
+Output requirements:
+- Return 1-4 visible targets and exactly one rule.
+- Identifiers use lowercase_snake_case. Roles: manipulated_object, destination, gripper.
+- task_type: pick, transport, place, pick_and_place, other.
+- constraint_type: during_execution or upon_completion.
+- Use only listed measurements, declared target_id values, and cameras from Runtime evidence JSON.
+- Do not infer inside from absolute x/y; use a relation mask measurement.
+- Do not call a direction-independent gripper change opened or closed.
+- Description, reasons, operators, thresholds and explanation describe the same measurable fact.
+- Return JSON only, without Markdown or analysis.

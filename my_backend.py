@@ -2,6 +2,8 @@
 from pathlib import Path
 
 from failure_detection.backends import load_qwen_once, create_online_tracker
+from failure_detection.prompts import load_prompt
+from failure_detection.rule_dsl import load_monitoring_plan
 from failure_detection.pipeline import StreamingRoboSentinel
 from failure_detection.pipeline.rule_engine import StreamingRuleEngine
 from failure_detection.stages import VLMScenePlanner, OnlineGroundingSAMTracker
@@ -38,9 +40,20 @@ def create_pipeline(config):
     qwen = configured_qwen(paths, options)
     tracker = create_online_tracker(paths["grounding_dino"], paths["sam"], options)
     rules = config["stages"]["rules"]
+    planner_options = config["stages"]["planner"]
+    root = config.get("_config_root", Path(__file__).parent)
+    instruction = load_prompt(root, planner_options["prompt"])
+    correction = load_prompt(root, planner_options["correction_prompt"])
+    envelope = load_prompt(root, planner_options["request_envelope"])
+    manual = (load_monitoring_plan(root, rules["manual_plan"], rules.get("max_rules", 6))
+              if rules.get("manual_plan") else None)
+
+    def infer(payload):
+        return qwen.plan_monitoring(payload, instruction, correction, envelope)
+
     return StreamingRoboSentinel(
         VLMScenePlanner(
-            qwen.plan_monitoring, require_rules=True,
+            infer, require_rules=True, mode=rules["mode"], manual_plan=manual,
             max_attempts=rules.get("max_generation_attempts", 2),
             max_rules=rules.get("max_rules", 6),
         ),

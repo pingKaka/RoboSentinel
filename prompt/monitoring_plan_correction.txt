@@ -1,0 +1,1 @@
+Repair previous_output using previous_output_error. Keep the valid task reasoning and return the complete JSON only. Each activation and condition directly contains feature, op, its required operator parameters, reason, and any required entity, entities, or camera. Remove unsupported fields and use only declared targets, cameras, features, and operators.

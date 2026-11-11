@@ -1,13 +1,13 @@
 # 可解释故障规则规范（v1.0.0）
 
-本项目借鉴 Code-as-Monitor 的“由 VLM 根据任务生成监控约束、运行时确定性执行”思路，但不执行 VLM 生成的任意 Python。VLM 只生成受限 JSON，系统先校验再编译为规则。
+本项目借鉴 Code-as-Monitor 的“由 VLM 根据任务生成监控约束、运行时确定性执行”思路，但不执行 VLM 生成的任意 Python。VLM直接声明 activation 和 condition 所需的特征、对象、算子、阈值和原因；确定性编译器补全内部 alias 与 binding，再由严格 Schema 校验。
 
 机器可读结构定义位于 `failure_detection/rule_dsl/rule_schema_v1.json`；Python 校验器在此基础上继续检查目标 ID、特征绑定和引用关系。
 
 ## 执行边界
 
 1. 任务开始时，VLM 查看初始多相机图像和任务描述，一次性生成跟踪目标与规则包。
-2. Schema 校验目标 ID、标准特征、算子、阈值和解释字段；失败最多重新生成两次。
+2. 编译器把简洁的 VLM 输出转换成运行时 DSL；Schema 校验目标 ID、标准特征、算子、阈值和解释字段，失败最多重新生成两次。
 3. GroundingDINO 和 SAM2.1 持续输出跟踪掩码，标准特征层逐帧计算特征。
 4. 规则引擎逐帧执行固定规则，只输出 `clear`、`confirmed` 或 `unknown`。
 5. 特征缺失或证据不足一律为 `unknown`，不作为故障。

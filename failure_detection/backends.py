@@ -54,14 +54,14 @@ class QwenBackend:
             )
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(path, **kwargs).eval()
 
-    def infer(self, frames, instruction, evidence):
+    def infer(self, frames, prompt_text):
         import torch
         content = []
         for camera, frame in frames.items():
             image = rgb(frame)
             image.thumbnail((self.image_max_side, self.image_max_side))
             content.extend([{"type": "text", "text": camera}, {"type": "image", "image": image}])
-        content.append({"type": "text", "text": instruction + "\nEvidence: " + json.dumps(evidence)})
+        content.append({"type": "text", "text": prompt_text})
         with _LOCK, torch.inference_mode():
             inputs = self.processor.apply_chat_template(
                 [{"role": "user", "content": content}], tokenize=True,
@@ -71,21 +71,21 @@ class QwenBackend:
             text = self.processor.batch_decode(output[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
         return parse_json(text)
 
-    def plan_monitoring(self, payload):
+    def plan_monitoring(self, payload, instruction, correction_instruction, request_envelope):
         correction = payload.get("validation_error")
-        instruction = '''Return only one JSON object for a robot failure monitor.
-Top level: {"targets": [...], "rule_package": {"schema_version":"1.0.0", "task_type":"pick|transport|place|pick_and_place|other", "rules":[...]}}.
-Each target is {"target_id":"lowercase_id", "name":"specific English visual phrase", "role":"manipulated_object|destination|gripper"}; use 1-4 visible task-relevant targets.
-Each rule requires: rule_id, failure_type, constraint_type (during_execution|upon_completion), description, feature_bindings, activation, condition, duration_sec, minimum_samples, unknown_policy="unknown", explanation_template.
-Each feature binding is {"alias":"lowercase_id", "feature":"catalog name", "entity":"target_id" OR "entities":["a","b"], "camera":"camera name when required", "reason":"why this evidence tests the constraint"}.
-Feature catalog: entity.visible_any, entity.missing_all_cameras, entity.visible_camera_count, entity.camera.visibility, entity.camera.mask_centroid_x, entity.camera.mask_centroid_y, entity.camera.mask_area_ratio, entity.camera.mask_perimeter_normalized, entity.camera.mask_component_count, entity.camera.mask_compactness, entity.camera.tracking_quality, relation.delta_x, relation.delta_y, relation.centroid_distance, relation.mask_iou, relation.mask_intersection_ratio, relation.mask_coverage_a, relation.mask_coverage_b, robot.tcp_x, robot.tcp_y, robot.tcp_z, robot.gripper_position_normalized.
-Expressions may only be {"op":"eq|gt|lt","feature":"alias","value":...}, {"op":"between","feature":"alias","min":...,"max":...}, {"op":"changed","feature":"alias","delta":...,"direction":"any|increase|decrease","window_sec":...}, {"op":"stable","feature":"alias","tolerance":...,"window_sec":...}, or {"op":"all|any","args":[expressions]}.
-Generate only task- and scene-relevant, explainable rules. Prefer target_lost, grasp_failed, and place_failed where applicable. Missing evidence is unknown. Do not emit Python or prose outside JSON.'''
         evidence = {"task": payload["task"], "available_cameras": sorted(payload["frames"])}
+        if payload.get("fixed_targets"):
+            evidence["fixed_targets"] = payload["fixed_targets"]
         if correction:
             evidence["previous_output_error"] = correction
-            evidence["instruction"] = "Correct the schema error and regenerate the full object."
-        return self.infer(payload["frames"], instruction, evidence)
+            if payload.get("previous_output") is not None:
+                evidence["previous_output"] = payload["previous_output"]
+            evidence["correction_instruction"] = correction_instruction
+        prompt_text = request_envelope.format(
+            instruction=instruction,
+            evidence_json=json.dumps(evidence, ensure_ascii=False),
+        )
+        return self.infer(payload["frames"], prompt_text)
 
 
 @lru_cache(maxsize=1)

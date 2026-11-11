@@ -9,6 +9,9 @@ video_teleop:
     enabled: true
     manual_failure_key: "f"
     dashboard_font: null
+    robot_state:
+      enabled: true
+      provider: "ur5e_rtde"
   teleop:
     control_mode: "isoteleop"
     dynamixel_config:
